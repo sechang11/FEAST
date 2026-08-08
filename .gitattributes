@@ -1,0 +1,20 @@
+# Shell scripts MUST check out with LF. A CRLF-terminated shebang makes Linux
+# and macOS fail with "bad interpreter: /usr/bin/env bash^M", which is exactly
+# what the CI builds run.
+*.sh text eol=lf
+
+# Same reasoning for anything else consumed by Unix tooling.
+Makefile   text eol=lf
+*.yml      text eol=lf
+*.f90      text eol=lf
+*.c        text eol=lf
+*.h        text eol=lf
+*.py       text eol=lf
+
+*.mtx      text eol=lf
+*.in       text eol=lf
+
+*.png binary
+*.pdf binary
+*.a   binary
+*.dll binary

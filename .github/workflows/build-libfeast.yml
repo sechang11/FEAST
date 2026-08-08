@@ -1,0 +1,102 @@
+name: build-libfeast
+
+# Produces libfeast for every platform the desktop app ships on, and runs the
+# analytic-eigenvalue smoke test on each so a green build means "numerically
+# correct", not just "it linked".
+#
+# macOS needs two runners: macos-14 is Apple Silicon, macos-13 is Intel. The
+# two .dylibs get merged into one universal binary in the `universal` job.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+            arch: linux-x64
+          - name: macos-arm64
+            os: macos-14
+            arch: macos-arm64
+          - name: macos-x64
+            os: macos-13
+            arch: macos-x64
+          - name: windows-x64
+            os: windows-latest
+            arch: windows-x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran libopenblas-dev
+
+      - name: Install toolchain (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install gcc
+          # Homebrew installs versioned binaries (gfortran-14, ...); expose a
+          # plain `gfortran` so build-feast.sh does not need to know the version.
+          ln -sf "$(ls $(brew --prefix)/bin/gfortran-* | sort -V | tail -1)" /usr/local/bin/gfortran || true
+          echo "$(brew --prefix)/bin" >> $GITHUB_PATH
+
+      - name: Install toolchain (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc-fortran
+            mingw-w64-x86_64-openblas
+            mingw-w64-x86_64-gcc
+
+      - name: Build + test (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          bash build/build-feast.sh --arch ${{ matrix.arch }}
+          bash build/run-test.sh ${{ matrix.arch }}
+
+      - name: Build + test (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          bash build/build-feast.sh --arch ${{ matrix.arch }}
+          bash build/run-test.sh ${{ matrix.arch }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libfeast-${{ matrix.arch }}
+          path: 4.0/lib/${{ matrix.arch }}/
+
+  universal:
+    name: macos-universal
+    needs: build
+    runs-on: macos-14
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: libfeast-macos-arm64, path: arm64 }
+      - uses: actions/download-artifact@v4
+        with: { name: libfeast-macos-x64,   path: x64 }
+      - name: lipo into a universal dylib
+        run: |
+          mkdir -p universal
+          lipo -create arm64/libfeast.dylib x64/libfeast.dylib \
+               -output universal/libfeast.dylib
+          lipo -info universal/libfeast.dylib
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libfeast-macos-universal
+          path: universal/

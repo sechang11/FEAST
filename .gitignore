@@ -1,0 +1,28 @@
+# Build outputs -- produced by build/build-feast.sh, never committed.
+build/obj/
+build/test_feast
+build/test_feast.exe
+4.0/lib/*/
+*.o
+*.mod
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/dist/
+
+# GUI verification output
+gui/gui_verify.png
+gui/*.png
+
+# OS noise
+.DS_Store
+Thumbs.db

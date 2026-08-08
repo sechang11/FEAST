@@ -1,0 +1,104 @@
+"""Loading matrices from the formats users actually have on disk."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import scipy.io
+import scipy.sparse as sp
+
+
+class MatrixLoadError(ValueError):
+    pass
+
+
+SUPPORTED = "Matrix Market (*.mtx *.mtx.gz);;CSV (*.csv *.txt);;NumPy (*.npy *.npz);;All files (*)"
+
+
+def load_matrix(path: str | Path):
+    """Return a dense ndarray or a scipy sparse matrix, whichever fits the file.
+
+    Matrix Market is the lingua franca for sparse test matrices (and what the
+    SuiteSparse collection ships), so it is the primary path.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise MatrixLoadError(f"file not found: {path}")
+
+    suf = path.suffixes
+    try:
+        if ".mtx" in suf:
+            m = scipy.io.mmread(str(path))
+            return sp.csr_matrix(m) if sp.issparse(m) else np.asarray(m)
+        if ".npy" in suf:
+            return np.load(str(path))
+        if ".npz" in suf:
+            try:
+                return sp.load_npz(str(path))
+            except Exception:
+                data = np.load(str(path))
+                return data[list(data.keys())[0]]
+        # Fall through to delimited text; sniff the separator.
+        text = path.read_text().strip()
+        delim = "," if "," in text.splitlines()[0] else None
+        return np.loadtxt(str(path), delimiter=delim)
+    except MatrixLoadError:
+        raise
+    except Exception as exc:
+        raise MatrixLoadError(f"could not read {path.name}: {exc}") from exc
+
+
+def describe(M) -> str:
+    if sp.issparse(M):
+        nnz = M.nnz
+        dens = 100.0 * nnz / (M.shape[0] * M.shape[1]) if M.shape[0] else 0.0
+        return f"sparse {M.shape[0]}x{M.shape[1]}, {nnz:,} nonzeros ({dens:.3f}% dense)"
+    return f"dense {M.shape[0]}x{M.shape[1]}, {M.dtype}"
+
+
+def check_symmetry(M, tol: float = 1e-10) -> tuple[bool, bool]:
+    """Return (is_symmetric, is_hermitian). FEAST's sy/he routines require one."""
+    if sp.issparse(M):
+        d = abs(M - M.T)
+        sym = (d.max() if d.nnz else 0.0) <= tol
+        dh = abs(M - M.getH())
+        herm = (dh.max() if dh.nnz else 0.0) <= tol
+        return bool(sym), bool(herm)
+    sym = bool(np.allclose(M, M.T, atol=tol))
+    herm = bool(np.allclose(M, M.conj().T, atol=tol))
+    return sym, herm
+
+
+# --- built-in demo problems ---------------------------------------------------
+# These give the app something to solve on first launch, and every one has a
+# known spectrum so the user can sanity-check the answer.
+
+def laplacian_1d(n: int = 200, sparse: bool = True):
+    """tridiag(-1,2,-1); eigenvalues 2-2cos(k*pi/(n+1))."""
+    if sparse:
+        return sp.diags([np.full(n - 1, -1.0), np.full(n, 2.0), np.full(n - 1, -1.0)],
+                        [-1, 0, 1], format="csr")
+    return (np.diag(np.full(n, 2.0)) + np.diag(np.full(n - 1, -1.0), 1)
+            + np.diag(np.full(n - 1, -1.0), -1))
+
+
+def laplacian_2d(k: int = 30):
+    """2-D Laplacian on a k x k grid; eigenvalues 4-2cos(i*pi/(k+1))-2cos(j*pi/(k+1))."""
+    t = sp.diags([np.full(k - 1, -1.0), np.full(k, 2.0), np.full(k - 1, -1.0)],
+                 [-1, 0, 1], format="csr")
+    eye = sp.identity(k, format="csr")
+    return sp.kron(t, eye) + sp.kron(eye, t)
+
+
+def random_symmetric(n: int = 300, seed: int = 0):
+    rng = np.random.default_rng(seed)
+    A = rng.standard_normal((n, n))
+    return (A + A.T) / 2
+
+
+DEMOS = {
+    "1-D Laplacian (n=200, sparse)": (lambda: laplacian_1d(200), 0.0, 0.02),
+    "2-D Laplacian (30x30 grid, sparse)": (lambda: laplacian_2d(30), 0.0, 0.5),
+    "1-D Laplacian (n=300, dense)": (lambda: laplacian_1d(300, sparse=False), 0.0, 0.01),
+    "Random symmetric (n=300, dense)": (lambda: random_symmetric(300), -1.0, 1.0),
+}
