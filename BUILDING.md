@@ -90,9 +90,36 @@ the window stays responsive.
 
 ## Status
 
-- Windows x64: **built and numerically verified on this machine** (max error
-  1.7e-16 vs analytic; 7/7 binding tests; GUI solves and renders).
-- Linux and macOS: the build script is written to handle them and CI is
-  configured, but **neither has actually been run yet** — there is no Mac or
-  Linux box here, and the repo has not been pushed. Treat
-  `.github/workflows/build-libfeast.yml` as unverified until it goes green once.
+All four targets build and pass the analytic test in CI.
+
+| Target | Library | `run-test.sh` | `feastpy` (7 tests) | GUI |
+|---|---|---|---|---|
+| windows-x64 | CI + local | 1.7e-16 | 7/7 local | verified local |
+| linux-x64 | CI + local | 2.0e-16 | 7/7 local | verified local |
+| macos-arm64 | CI | 1.9e-16 | not yet run | not yet run |
+| macos-x64 | CI | CI pass | not yet run | not yet run |
+| macos-universal | `lipo` of both | — | — | — |
+
+The universal dylib was checked at the Mach-O level, not just assumed from a
+green job: it is a FAT binary with two slices, `x86_64` (890 KB) and `arm64`
+(744 KB).
+
+Linux was verified on a Fedora 44 box using a conda-forge toolchain in
+`$HOME` (no root needed) — `micromamba create -p ~/feastenv -c conda-forge
+gfortran openblas python numpy scipy pyside6 pyqtgraph` — which is a useful
+recipe when you cannot install system packages.
+
+### Still unverified
+
+- `feastpy` and the GUI have **not** been exercised on either macOS
+  architecture. A green library job does not prove the ctypes layer finds and
+  loads the dylib; that is exactly where the `AMD64` vs `x86_64` arch-detection
+  bug showed up on Windows.
+- Nothing is signed or notarized, so macOS will refuse the app on first launch
+  until it is (`xattr -dr com.apple.quarantine` to test before then).
+
+### Runner note
+
+Use `macos-15-intel`, not `macos-13`, for the Intel build. The `macos-13` image
+was retired; jobs requesting it queue forever rather than failing, which reads
+as a runner backlog instead of a bad label.
