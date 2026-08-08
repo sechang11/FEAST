@@ -27,8 +27,11 @@ jobs:
           - name: macos-arm64
             os: macos-14
             arch: macos-arm64
+          # Intel Mac. NOT macos-13: that image was retired, and jobs asking
+          # for it sit queued forever instead of failing, which looks like a
+          # backlog rather than a broken label.
           - name: macos-x64
-            os: macos-13
+            os: macos-15-intel
             arch: macos-x64
           - name: windows-x64
             os: windows-latest
