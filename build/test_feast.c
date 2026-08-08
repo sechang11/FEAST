@@ -14,6 +14,11 @@
 #include "feast.h"
 #include "feast_dense.h"
 
+/* M_PI is POSIX, not ISO C, so a strict-conformance build can omit it. */
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 #define N 100
 
 int main(void) {

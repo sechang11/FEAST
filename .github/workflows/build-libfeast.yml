@@ -47,10 +47,14 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install gcc
-          # Homebrew installs versioned binaries (gfortran-14, ...); expose a
-          # plain `gfortran` so build-feast.sh does not need to know the version.
-          ln -sf "$(ls $(brew --prefix)/bin/gfortran-* | sort -V | tail -1)" /usr/local/bin/gfortran || true
-          echo "$(brew --prefix)/bin" >> $GITHUB_PATH
+          # Homebrew ships versioned binaries (gfortran-14) and no plain
+          # `gfortran`. Rather than symlink into /usr/local/bin -- which is not
+          # writable the same way on the arm64 and x86_64 runners -- point FC at
+          # whatever version got installed. Both scripts honour $FC.
+          FC_BIN="$(ls "$(brew --prefix)"/bin/gfortran-* | sort -V | tail -1)"
+          echo "FC=$FC_BIN" >> $GITHUB_ENV
+          echo "using $FC_BIN"
+          "$FC_BIN" --version | head -1
 
       - name: Install toolchain (Windows)
         if: runner.os == 'Windows'
