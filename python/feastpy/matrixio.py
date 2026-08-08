@@ -28,7 +28,14 @@ def load_matrix(path: str | Path):
     suf = path.suffixes
     try:
         if ".mtx" in suf:
-            m = scipy.io.mmread(str(path))
+            try:
+                m = scipy.io.mmread(str(path))
+            except ValueError:
+                # FEAST's own data files in 4.0/utility/data are a mix: some
+                # carry the %%MatrixMarket banner, some are bare coordinate
+                # format ("nrow ncol nnz" then i j value). Without this fallback
+                # the app cannot open the matrices FEAST itself ships.
+                m = _read_bare_coordinate(path)
             return sp.csr_matrix(m) if sp.issparse(m) else np.asarray(m)
         if ".npy" in suf:
             return np.load(str(path))
@@ -46,6 +53,40 @@ def load_matrix(path: str | Path):
         raise
     except Exception as exc:
         raise MatrixLoadError(f"could not read {path.name}: {exc}") from exc
+
+
+def _read_bare_coordinate(path: Path):
+    """Read banner-less coordinate format: 'nrow ncol nnz' then i j value lines.
+
+    Fortran writes doubles as 1.0D-19; Python needs 1.0e-19.
+    """
+    rows, cols, vals = [], [], []
+    n = m = None
+    with path.open() as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith(("%", "#", "!")):
+                continue
+            parts = line.replace("D", "e").replace("d", "e").split()
+            if n is None:
+                if len(parts) < 3:
+                    raise MatrixLoadError(f"{path.name}: bad header line {line!r}")
+                n, m = int(parts[0]), int(parts[1])
+                continue
+            if len(parts) < 3:
+                continue
+            rows.append(int(parts[0]) - 1)          # 1-based on disk
+            cols.append(int(parts[1]) - 1)
+            if len(parts) >= 4:                      # complex: i j re im
+                vals.append(complex(float(parts[2]), float(parts[3])))
+            else:
+                vals.append(float(parts[2]))
+
+    if n is None:
+        raise MatrixLoadError(f"{path.name}: no data found")
+    dtype = complex if any(isinstance(v, complex) for v in vals) else float
+    return sp.coo_matrix((np.array(vals, dtype=dtype), (rows, cols)),
+                         shape=(n, m)).tocsr()
 
 
 def describe(M) -> str:

@@ -181,6 +181,16 @@ def eigh_interval(
     )
 
 
+def _as_uplo(M, uplo: str):
+    """Store M the way FEAST's UPLO argument says it is stored."""
+    import scipy.sparse as sp
+    if uplo == "U":
+        return sp.triu(M, format="csr")
+    if uplo == "L":
+        return sp.tril(M, format="csr")
+    return sp.csr_matrix(M)          # 'F': the whole matrix, untouched
+
+
 def eigsh_interval(
     A,
     emin: float,
@@ -209,16 +219,20 @@ def eigsh_interval(
     if emin >= emax:
         raise ValueError(f"need emin < emax, got emin={emin}, emax={emax}")
 
-    # FEAST wants upper-triangle CSR with 1-based indices.
-    A = sp.triu(A, format="csr") if uplo.upper() == "U" else sp.tril(A, format="csr")
+    # FEAST wants 1-based CSR, stored to match UPLO: 'U'/'L' expect only that
+    # triangle, 'F' expects the whole matrix. Triangularising an 'F' matrix
+    # silently discards half of it and the solve then finds nothing.
+    uplo = uplo.upper()
+    if uplo not in ("U", "L", "F"):
+        raise ValueError(f"uplo must be 'U', 'L' or 'F', got {uplo!r}")
+    A = _as_uplo(A, uplo)
     A.sort_indices()
     sa = np.ascontiguousarray(A.data, dtype=np.float64)
     isa = np.ascontiguousarray(A.indptr + 1, dtype=np.int32)
     jsa = np.ascontiguousarray(A.indices + 1, dtype=np.int32)
 
     if B is not None:
-        B = sp.csr_matrix(B)
-        B = sp.triu(B, format="csr") if uplo.upper() == "U" else sp.tril(B, format="csr")
+        B = _as_uplo(sp.csr_matrix(B), uplo)
         B.sort_indices()
         sb = np.ascontiguousarray(B.data, dtype=np.float64)
         isb = np.ascontiguousarray(B.indptr + 1, dtype=np.int32)
