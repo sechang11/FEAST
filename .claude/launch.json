@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "feast-web",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd web && ..\\.venv\\Scripts\\python.exe -m uvicorn server:app --port 8000"
+      ],
+      "port": 8000
+    }
+  ]
+}

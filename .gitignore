@@ -32,3 +32,10 @@ gui/*.png
 # OS noise
 .DS_Store
 Thumbs.db
+
+# Generated site output and screenshots
+web/static/*.html
+web/shots/
+web/_upload*
+gui/qa_win*/
+gui/qa*.png

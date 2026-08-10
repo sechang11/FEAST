@@ -1,5 +1,5 @@
 """feastpy -- Python interface to the FEAST eigenvalue solver."""
-from . import diagnostics, results_io
+from . import codegen, diagnostics, matrixio, results_io, runner
 from ._lib import FeastLibraryNotFound, load
 from .results_io import save_results
 from .solver import (
@@ -25,5 +25,8 @@ __all__ = [
     "save_results",
     "results_io",
     "diagnostics",
+    "runner",
+    "codegen",
+    "matrixio",
 ]
 __version__ = "0.1.0"
