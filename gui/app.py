@@ -183,6 +183,109 @@ class CodeDialog(QDialog):
             Path(path).write_text(self.text.toPlainText(), encoding="utf-8")
 
 
+class GenerateDialog(QDialog):
+    """Make a random test matrix without needing a file.
+
+    Useful for trying the app out, and for producing a problem of a chosen size
+    when you want to see how it behaves on something bigger than the demos.
+    """
+
+    KINDS = ["sparse symmetric", "dense symmetric", "dense complex Hermitian"]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Generate a random matrix")
+        self.result_matrices = None
+
+        form = QFormLayout(self)
+        self.kind = QComboBox()
+        self.kind.addItems(self.KINDS)
+        self.kind.currentIndexChanged.connect(self._sync)
+        form.addRow("Type", self.kind)
+
+        self.n = QSpinBox()
+        self.n.setRange(2, 200_000)
+        self.n.setValue(2000)
+        form.addRow("Size n", self.n)
+
+        self.density = QDoubleSpinBox()
+        self.density.setDecimals(5)
+        self.density.setRange(0.00001, 1.0)
+        self.density.setSingleStep(0.0005)
+        self.density.setValue(0.001)
+        form.addRow("Density", self.density)
+
+        self.generalized = QCheckBox("also generate a positive definite B")
+        form.addRow(self.generalized)
+
+        self.seed = QSpinBox()
+        self.seed.setRange(-1, 2_000_000_000)
+        self.seed.setValue(-1)
+        self.seed.setSpecialValueText("random each time")
+        self.seed.setToolTip("Set a seed to reproduce the same matrix again.")
+        form.addRow("Seed", self.seed)
+
+        self.warn = QLabel()
+        self.warn.setWordWrap(True)
+        self.warn.setStyleSheet("color: palette(text); font-size: 11px;")
+        form.addRow(self.warn)
+
+        row = QHBoxLayout()
+        ok = QPushButton("Generate")
+        ok.setDefault(True)
+        ok.clicked.connect(self.generate)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        row.addStretch(1)
+        row.addWidget(cancel)
+        row.addWidget(ok)
+        form.addRow(row)
+
+        self.n.valueChanged.connect(self._sync)
+        self.density.valueChanged.connect(self._sync)
+        self._sync()
+
+    def _sync(self):
+        sparse = self.kind.currentText().startswith("sparse")
+        self.density.setEnabled(sparse)
+        n = self.n.value()
+        if not sparse:
+            # A dense matrix is n^2 doubles and the solve is O(n^3); saying so
+            # beats letting someone type 50000 and wait for the swap file.
+            mb = n * n * 8 / 1e6
+            self.warn.setText(f"Dense: about {mb:,.0f} MB of memory."
+                              + ("  That is a lot - consider sparse." if mb > 500 else ""))
+        else:
+            nnz = max(n, int(self.density.value() * n * n / 2)) * 2
+            self.warn.setText(f"Sparse: roughly {nnz:,} nonzeros.")
+
+    def generate(self):
+        seed = None if self.seed.value() < 0 else self.seed.value()
+        n = self.n.value()
+        kind = self.kind.currentText()
+        try:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            if kind.startswith("sparse"):
+                A = matrixio.random_sparse_symmetric(n, self.density.value(), seed)
+            elif "Hermitian" in kind:
+                A = matrixio.random_hermitian(n, seed)
+            else:
+                A = matrixio.random_symmetric(n, seed if seed is not None else 0)
+            B = None
+            if self.generalized.isChecked():
+                B = matrixio.random_spd(n, sparse=kind.startswith("sparse"), seed=seed)
+            self.result_matrices = (A, B, f"random {kind}, n={n}"
+                                    + (f", seed={seed}" if seed is not None else ""))
+        except MemoryError:
+            QMessageBox.warning(self, APP_NAME,
+                                "Not enough memory for a matrix that size. "
+                                "Try a smaller n, or the sparse type.")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.accept()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -224,9 +327,15 @@ class MainWindow(QMainWindow):
         self.demo_combo.currentIndexChanged.connect(self.load_demo)
         sf.addWidget(QLabel("Built-in problem:"))
         sf.addWidget(self.demo_combo)
+        openrow = QHBoxLayout()
         open_btn = QPushButton("Open matrix file...")
         open_btn.clicked.connect(self.open_file)
-        sf.addWidget(open_btn)
+        openrow.addWidget(open_btn)
+        gen_btn = QPushButton("Generate random...")
+        gen_btn.setToolTip("Make a random test matrix of a size you choose.")
+        gen_btn.clicked.connect(self.generate_matrix)
+        openrow.addWidget(gen_btn)
+        sf.addLayout(openrow)
         self.matrix_label = QLabel("no matrix loaded")
         self.matrix_label.setWordWrap(True)
         # palette(mid) is nearly invisible on a dark theme; dim the normal text
@@ -288,6 +397,12 @@ class MainWindow(QMainWindow):
         self.count_label.setWordWrap(True)
         self.count_label.setStyleSheet("color: palette(text); font-size: 11px;")
         itf.addRow(self.count_label)
+
+        self.fit_btn = QPushButton("Fit view to results")
+        self.fit_btn.setToolTip("Re-frame the plot around what was found.\n"
+                                "Double-clicking the plot does the same.")
+        self.fit_btn.clicked.connect(self.fit_view)
+        itf.addRow(self.fit_btn)
 
         self.zoom_out_btn = QPushButton("Zoom out to full spectrum")
         self.zoom_out_btn.setToolTip("Solving zooms the plot to the interval; "
@@ -397,6 +512,9 @@ class MainWindow(QMainWindow):
         self.plot.addItem(self.region)
 
         self.plot.setTitle("press Solve to find eigenvalues in the shaded band")
+        # Double-click anywhere on either plot re-fits it, so getting lost while
+        # panning is one click to undo rather than a hunt for the "A".
+        self.plot.scene().sigMouseClicked.connect(self._plot_clicked)
 
         self.conv_plot = pg.PlotWidget()
         self.conv_plot.setBackground(None)
@@ -409,7 +527,9 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(self.plot, "Spectrum")
         self.tabs.addTab(self.conv_plot, "Convergence")
-        rv.addWidget(self.tabs, stretch=3)
+        self.rsplit = QSplitter(Qt.Vertical)
+        self.rsplit.setChildrenCollapsible(True)
+        self.rsplit.addWidget(self.tabs)
 
         self.empty_label = QLabel()
         self.empty_label.setAlignment(Qt.AlignCenter)
@@ -424,7 +544,7 @@ class MainWindow(QMainWindow):
         self.results_stack = QStackedWidget()
         self.results_stack.addWidget(self.empty_label)   # 0
         self.results_stack.addWidget(self.table)         # 1
-        rv.addWidget(self.results_stack, stretch=4)
+        self.rsplit.addWidget(self.results_stack)
         self._show_placeholder("Choose a search interval, then press Solve.\n\n"
                                "The shaded band on the plot is the interval; "
                                "drag it to move it.")
@@ -433,7 +553,18 @@ class MainWindow(QMainWindow):
         self.log.setReadOnly(True)
         self.log.setMaximumHeight(130)
         self.log.setFont(QFont("Consolas" if sys.platform == "win32" else "Menlo", 9))
-        rv.addWidget(self.log, stretch=1)
+        self.rsplit.addWidget(self.log)
+        # Growth goes to the plot: the table scrolls, so showing 40 rows instead
+        # of 20 helps far less than a bigger spectrum does.
+        self.rsplit.setStretchFactor(0, 3)
+        self.rsplit.setStretchFactor(1, 2)
+        self.rsplit.setStretchFactor(2, 0)
+        # Stretch factors only govern *extra* space; without explicit starting
+        # sizes the panes open at their size hints and the log ends up larger
+        # than the results table.
+        self.rsplit.setSizes([440, 300, 110])
+        self.results_stack.setMinimumHeight(120)
+        rv.addWidget(self.rsplit)
 
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
@@ -475,6 +606,55 @@ class MainWindow(QMainWindow):
                                  "The FEAST native library could not be loaded.\n\n"
                                  f"{exc}")
             self.solve_btn.setEnabled(False)
+
+    # -- plot navigation ---------------------------------------------------
+    def _plot_clicked(self, ev):
+        """Double-click re-fits the plot.
+
+        Panning off the data and not knowing how to get back is the single
+        easiest way to lose a result. pyqtgraph's own escape hatch is a tiny
+        'A' in the corner, which nobody finds without being told.
+        """
+        try:
+            if ev.double():
+                self.fit_view()
+        except Exception:
+            pass
+
+    @Slot()
+    def fit_view(self):
+        """Frame whatever is worth looking at on the current tab."""
+        if self.tabs.currentIndex() == 1:
+            self.conv_plot.enableAutoRange()
+            self.conv_plot.autoRange()
+            return
+        r = self.result
+        if r is not None and r.n_found:
+            lo, hi = float(min(r.eigenvalues)), float(max(r.eigenvalues))
+            span = hi - lo
+            pad = 0.08 * span if span > 0 else max(abs(hi) * 1e-6, 1e-9)
+            self.plot.setXRange(lo - pad, hi + pad)
+            self.plot.setYRange(0, r.n_found + 1)
+        elif self.bounds is not None:
+            lo, hi = self.bounds
+            pad = 0.02 * (hi - lo) or 1e-9
+            self.plot.setXRange(lo - pad, hi + pad)
+        else:
+            self.plot.enableAutoRange()
+            self.plot.autoRange()
+
+    def _apply_pan_limits(self):
+        """Stop the view wandering somewhere with nothing in it.
+
+        Without limits a scroll-wheel zoom can leave the data thousands of units
+        away with no cue about which direction to go back.
+        """
+        if self.bounds is None:
+            return
+        lo, hi = self.bounds
+        span = (hi - lo) or 1.0
+        self.plot.setLimits(xMin=lo - span, xMax=hi + span,
+                            minXRange=span * 1e-9, maxXRange=span * 4)
 
     # -- interval <-> plot band -------------------------------------------
     # Both directions write to the other, so a guard breaks the feedback loop.
@@ -519,6 +699,7 @@ class MainWindow(QMainWindow):
         self.count_label.setText("drag the shaded band on the plot to choose an interval")
         pad = 0.02 * (hi - lo)
         self.plot.setXRange(lo - pad, hi + pad)
+        self._apply_pan_limits()
         self._spins_to_region()
 
     @Slot()
@@ -595,6 +776,16 @@ class MainWindow(QMainWindow):
         self._update_spectrum_view()
         self._log(f"loaded demo: {name}")
 
+    def _clear_demo_selection(self):
+        """Stop the dropdown claiming a demo is loaded when it is not.
+
+        Opening a file or generating a matrix leaves the combo showing whatever
+        demo was chosen last, which is simply untrue.
+        """
+        self.demo_combo.blockSignals(True)
+        self.demo_combo.setCurrentIndex(-1)
+        self.demo_combo.blockSignals(False)
+
     def _set_b(self, B, origin: str):
         """Adopt B after checking it can actually serve as the mass matrix."""
         if B.shape != self.matrix.shape:
@@ -651,6 +842,27 @@ class MainWindow(QMainWindow):
             self.b_path = path
 
     @Slot()
+    def generate_matrix(self):
+        dlg = GenerateDialog(self)
+        if dlg.exec() != QDialog.Accepted or not dlg.result_matrices:
+            return
+        A, B, label = dlg.result_matrices
+        self.matrix = A
+        self.matrix_path = None
+        self.b_path = None
+        self.b_matrix = None
+        self._clear_demo_selection()
+        self.clear_b_btn.setEnabled(False)
+        self.b_label.setText("no B - standard problem A x = λ x")
+        self.matrix_label.setText(f"{matrixio.describe(A)}  ({label})")
+        if B is not None:
+            self._set_b(B, "generated")
+        self._update_spectrum_view()
+        self._log(f"generated {label}: {matrixio.describe(A)}")
+        # A fresh random spectrum makes the previous interval meaningless.
+        self.use_full_range()
+
+    @Slot()
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open matrix", "",
                                               matrixio.SUPPORTED)
@@ -679,6 +891,7 @@ class MainWindow(QMainWindow):
         self.matrix_path = path
         self.b_matrix = None
         self.b_path = None
+        self._clear_demo_selection()
         self.clear_b_btn.setEnabled(False)
         self.b_label.setText("no B - standard problem A x = λ x")
         self.matrix_label.setText(matrixio.describe(M))

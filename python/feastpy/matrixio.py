@@ -139,6 +139,54 @@ def random_symmetric(n: int = 300, seed: int = 0):
     return (A + A.T) / 2
 
 
+def random_sparse_symmetric(n: int = 2000, density: float = 0.001,
+                            seed: Optional[int] = None):
+    """A random sparse symmetric matrix with a banded structure.
+
+    Deliberately banded rather than a random sparsity pattern. A uniformly
+    random pattern makes the shifted systems FEAST solves internally badly
+    conditioned, and IFEAST's iterative inner solver then fails to converge at
+    default settings -- so "generate a matrix, press Solve" would return
+    info=2 and look like a broken app. Real sparse eigenproblems (finite
+    difference, finite element) are structured, and banded matrices behave the
+    way users expect.
+
+    `density` sets the bandwidth: the fraction of the row that is populated.
+    """
+    rng = np.random.default_rng(seed)
+    bandwidth = max(1, min(n - 1, int(round(density * n * n / (2 * n))) or 1))
+
+    diags, offsets = [], []
+    for k in range(1, bandwidth + 1):
+        # Decay with distance from the diagonal, as a discretised operator does.
+        diags.append(rng.standard_normal(n - k) / (k + 1))
+        offsets.append(k)
+    lower = [d.copy() for d in diags]
+    all_diags = list(reversed(lower)) + [np.zeros(n)] + diags
+    all_offsets = [-k for k in reversed(offsets)] + [0] + offsets
+
+    A = sp.diags(all_diags, all_offsets, format="csr")
+    # Diagonal dominance keeps it well conditioned and spreads the spectrum.
+    row_abs = np.asarray(abs(A).sum(axis=1)).ravel()
+    return (A + sp.diags(row_abs + rng.uniform(0.5, 1.5, n))).tocsr()
+
+
+def random_spd(n: int = 300, sparse: bool = True, seed: Optional[int] = None):
+    """A positive definite matrix, for use as B in a generalized problem."""
+    rng = np.random.default_rng(seed)
+    if sparse:
+        off = rng.uniform(0.05, 0.25, n - 1)
+        return sp.diags([off, np.full(n, 2.0), off], [-1, 0, 1], format="csr")
+    A = rng.standard_normal((n, n))
+    return A @ A.T + n * np.eye(n)
+
+
+def random_hermitian(n: int = 200, seed: Optional[int] = None):
+    rng = np.random.default_rng(seed)
+    A = rng.standard_normal((n, n)) + 1j * rng.standard_normal((n, n))
+    return (A + A.conj().T) / 2
+
+
 def guess_b_path(path: str | Path) -> Optional[Path]:
     """Find the B matrix that goes with an A matrix, by FEAST's own convention.
 
