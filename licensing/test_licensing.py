@@ -110,7 +110,23 @@ check("machine id is formatted for a human to read",
 check("machine id does not leak the raw identifier",
       machine.raw_id() not in MACHINE)
 
-# --- free tier ---------------------------------------------------------------
+# --- licensing disabled by default -------------------------------------------
+# A build with no signing key configured must behave like ordinary software:
+# no caps, no "free version", and it must still start.
+check("inert until a signing key is configured", not licensing.ENABLED,
+      licensing.why_disabled())
+check("nothing is capped when inert",
+      licensing.check_size(10_000_000, sparse=False) is None)
+check("load() reports unrestricted when inert", licensing.load().licensed)
+try:
+    licensing.install("FEAST1-anything")
+    check("install refuses when inert", False, "accepted!")
+except licensing.LicenseError:
+    check("install refuses when inert", True)
+
+# --- free tier (with licensing switched on for the rest of the tests) ---------
+licensing.ENABLED = True
+K.PUBLIC_KEY_B64 = PUB
 check("small dense matrix is free", licensing.check_size(500, sparse=False) is None)
 check("large dense matrix needs a licence",
       licensing.check_size(5000, sparse=False) is not None,
@@ -124,7 +140,6 @@ check("many nonzeros need a licence",
 # --- storage round trip ------------------------------------------------------
 with tempfile.TemporaryDirectory() as td:
     os.environ["FEAST_LICENSE_FILE"] = os.path.join(td, "license.key")
-    K.PUBLIC_KEY_B64 = PUB                      # pretend this build shipped with it
     check("no licence installed initially", not licensing.load().licensed)
     st = licensing.install(key)
     check("installing a licence works", st.licensed and st.holder.startswith("Ada"))

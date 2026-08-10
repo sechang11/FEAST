@@ -235,6 +235,12 @@ class LicenseDialog(QDialog):
         self.refresh()
 
     def refresh(self):
+        if not licensing.ENABLED:
+            self.status.setText(f"<b>Unrestricted build.</b><br>{licensing.why_disabled()}")
+            self.entry.setEnabled(False)
+            self.apply_btn.setEnabled(False)
+            self.remove_btn.setEnabled(False)
+            return
         st = licensing.load()
         if st.licensed:
             self.status.setText(
@@ -1272,7 +1278,8 @@ class MainWindow(QMainWindow):
 
     def refresh_license(self):
         self.license_status = licensing.load()
-        if self.license_status.licensed:
+        # Only say "free version" when this build actually enforces something.
+        if self.license_status.licensed or not licensing.ENABLED:
             self.setWindowTitle(APP_NAME)
         else:
             self.setWindowTitle(f"{APP_NAME}  -  free version")

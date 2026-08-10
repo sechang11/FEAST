@@ -98,7 +98,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python dependencies
-        run: python -m pip install --upgrade pip numpy scipy PySide6 pyqtgraph psutil
+        run: python -m pip install --upgrade pip numpy scipy PySide6 pyqtgraph psutil cryptography
 
       - name: Expose the mingw DLLs (Windows)
         if: runner.os == 'Windows'

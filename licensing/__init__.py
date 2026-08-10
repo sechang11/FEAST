@@ -16,8 +16,38 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
-from .keys import License, LicenseError, check_for_machine, issue, new_keypair, verify
+# Licensing is an optional layer. If the crypto library is missing, or no
+# signing key has been configured for this build, the application runs with no
+# restrictions at all rather than refusing to start: an eigensolver should not
+# be held hostage by its commercial packaging, and pre-licence builds (demos,
+# evaluations, source checkouts) must behave like ordinary software.
+try:
+    from .keys import (License, LicenseError, check_for_machine, issue,
+                       new_keypair, verify, PUBLIC_KEY_B64)
+    _CRYPTO = True
+except Exception:                       # cryptography not installed
+    _CRYPTO = False
+    PUBLIC_KEY_B64 = "REPLACE_WITH_YOUR_PUBLIC_KEY"
+
+    class LicenseError(Exception):
+        pass
+
+    class License:                      # placeholder so type hints still work
+        name = email = machine = tier = issued = updates_until = note = ""
+
 from .machine import machine_id
+
+#: True only when this build can actually check licences. When False nothing is
+#: capped, nothing says "free version", and Help -> Licence explains why.
+ENABLED = _CRYPTO and PUBLIC_KEY_B64 != "REPLACE_WITH_YOUR_PUBLIC_KEY"
+
+
+def why_disabled() -> str:
+    if not _CRYPTO:
+        return ("Licensing is unavailable in this build: the cryptography "
+                "package is not installed.")
+    return ("This build has no signing key configured, so it runs without "
+            "restrictions.")
 
 # The build this source produced, used for the update entitlement check.
 BUILD_DATE = date(2026, 8, 10)
@@ -59,6 +89,8 @@ def license_path() -> Path:
 
 def load() -> Status:
     """Read and check the stored licence, if any."""
+    if not ENABLED:
+        return Status(licensed=True)     # unrestricted; nothing to check
     path = license_path()
     if not path.exists():
         return Status(licensed=False)
@@ -74,6 +106,8 @@ def load() -> Status:
 
 def install(text: str) -> Status:
     """Validate a pasted licence and store it. Raises LicenseError if invalid."""
+    if not ENABLED:
+        raise LicenseError(why_disabled())
     lic = check_for_machine(text, machine_id(), BUILD_DATE)
     path = license_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,6 +121,8 @@ def remove() -> None:
 
 def check_size(n: int, sparse: bool, nnz: int = 0) -> Optional[str]:
     """None if this problem is within the free tier, else why it is not."""
+    if not ENABLED:
+        return None
     if sparse:
         if n > FREE_SPARSE_N:
             return (f"This matrix is {n:,}x{n:,}. The free version handles sparse "
@@ -101,6 +137,7 @@ def check_size(n: int, sparse: bool, nnz: int = 0) -> Optional[str]:
 
 
 __all__ = ["License", "LicenseError", "Status", "BUILD_DATE", "check_size",
+           "ENABLED", "why_disabled",
            "install", "license_path", "load", "machine_id", "remove",
            "issue", "verify", "new_keypair", "check_for_machine",
            "FREE_DENSE_N", "FREE_SPARSE_N", "FREE_NNZ"]
