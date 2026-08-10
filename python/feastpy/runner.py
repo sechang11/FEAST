@@ -1,26 +1,43 @@
-"""Running a solve so that it can actually be cancelled.
+"""Running a solve so that it can be cancelled and can report progress.
 
-A FEAST call is a single blocking trip into Fortran. Once it starts there is no
-callback and no polling point, so a thread running it cannot be interrupted --
-Python cannot kill a thread that is not executing bytecode, and the simple
-interfaces expose no abort hook. (FEAST's RCI interfaces do hand control back
-each step, but using them means reimplementing the inner complex linear solves
-here, with different numerics from the routines we ship.)
+Two things force the solve out of this process and into a child:
 
-So the solve runs in a child *process*, which the OS can terminate outright.
+1. Cancel. A FEAST call is one blocking trip into Fortran -- no callback, no
+   polling point, no abort hook -- so a thread running it cannot be
+   interrupted; Python cannot kill a thread that is not executing bytecode.
+   (The RCI interfaces do hand control back each step, but using them means
+   reimplementing the inner complex linear solves here, with different numerics
+   from the routines we ship.) A process, the OS can terminate.
+
+2. Progress. FEAST reports convergence by *printing* it. Capturing that needs
+   the child's stdout to be a pipe from process creation: on Windows
+   libgfortran links its own C runtime, and neither os.dup2() on our file
+   descriptors nor SetStdHandle() after the fact redirects it. Both were tried.
+
+So the child is launched with subprocess (not multiprocessing, which cannot set
+the child's stdio), and the payload travels via pickle files.
 
 The cost is that A and B are pickled to the child, so a solve briefly needs
-memory for two copies of the matrices. For interactive problems that is a fair
-trade for a Cancel button that always works; `solve_blocking` is available when
-it is not.
+memory for two copies. `solve_blocking` runs in-process for callers who would
+rather not pay that.
 """
 from __future__ import annotations
 
-import multiprocessing as mp
+import os
+import pickle
 import queue as _queue
+import subprocess
+import sys
+import tempfile
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
+
+# Set in a frozen build so the app's entry point can route straight to the
+# child's main() instead of relaunching the GUI.
+CHILD_ENV_FLAG = "FEASTPY_SOLVE_CHILD"
 
 
 def solve_blocking(A, B, params: dict):
@@ -35,77 +52,161 @@ def solve_blocking(A, B, params: dict):
     return r, time.perf_counter() - t0
 
 
-def _child(A, B, params, q):
-    """Entry point in the child process. Must be importable at module level so
-    Windows' spawn start method can pickle a reference to it."""
+def parse_progress(line: str) -> Optional[dict]:
+    """Parse one row of FEAST's runtime convergence table.
+
+    With fpm(1)=1 FEAST prints, per refinement loop:
+
+        #It | #Eig |     Trace     |  Error-Trace  |  Max-Residual
+          0    16    9.5174696E+00   1.0000000E+00   8.8472770E-02
+
+    Everything else it prints -- banners, the parameter table, IFEAST's inner
+    '#it    19; res min= ...' lines -- has a different shape and is ignored.
+    """
+    parts = line.split()
+    if len(parts) != 5:
+        return None
     try:
-        r, secs = solve_blocking(A, B, params)
-        q.put(("ok", r, secs))
-    except Exception as exc:
-        q.put(("error", f"{type(exc).__name__}: {exc}", 0.0))
+        loop, n_eig = int(parts[0]), int(parts[1])
+        trace, err, res = (float(p.replace("D", "E").replace("d", "e"))
+                           for p in parts[2:])
+    except ValueError:
+        return None
+    if loop < 0 or n_eig < 0:
+        return None
+    return {"loop": loop, "n_eig": n_eig, "trace": trace,
+            "error_trace": err, "residual": res}
 
 
 @dataclass
 class SolveHandle:
-    """A running solve that can be cancelled."""
+    """A running solve that can be cancelled and polled for progress."""
 
     process: Any
     queue: Any
+    result_path: Path
+    payload_path: Path
     started: float
+    reader: Any = None
+    _done: bool = field(default=False, init=False)
 
     def poll(self, timeout: float = 0.1):
-        """Return ('ok', result, secs) / ('error', msg, 0) / None if still running.
-
-        A dead child with an empty queue means it was killed or crashed; that is
-        reported as an error rather than hanging forever.
+        """Return one of:
+            ('progress', record, 0.0)   a convergence-table row
+            ('ok', FeastResult, secs)   finished
+            ('error', message, 0.0)     failed
+            None                        still running
         """
         try:
             return self.queue.get(timeout=timeout)
         except _queue.Empty:
             pass
-        if not self.process.is_alive():
-            code = self.process.exitcode
-            if code == 0:
-                # Finished but the result is still in flight down the pipe.
-                try:
-                    return self.queue.get(timeout=2.0)
-                except _queue.Empty:
-                    return ("error", "solver process ended without returning a result", 0.0)
-            return ("error", f"solver process died (exit code {code})", 0.0)
-        return None
+
+        if self.process.poll() is None:
+            return None
+        if self._done:
+            return None
+        self._done = True
+
+        # Drain anything the reader queued between the checks above.
+        try:
+            return self.queue.get_nowait()
+        except _queue.Empty:
+            pass
+
+        if self.result_path.exists():
+            try:
+                with self.result_path.open("rb") as fh:
+                    return pickle.load(fh)
+            except Exception as exc:
+                return ("error", f"could not read solver result: {exc}", 0.0)
+        return ("error",
+                f"solver process ended without a result (exit code {self.process.returncode})",
+                0.0)
 
     @property
     def running(self) -> bool:
-        return self.process.is_alive()
+        return self.process.poll() is None
 
     def cancel(self, grace: float = 0.5) -> None:
         """Terminate the solve. Safe to call more than once."""
-        if not self.process.is_alive():
+        if self.process.poll() is not None:
             return
         self.process.terminate()
-        self.process.join(grace)
-        if self.process.is_alive():        # ignored SIGTERM: escalate
+        try:
+            self.process.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            self.process.kill()                 # ignored SIGTERM: escalate
             try:
-                self.process.kill()
-            except Exception:
+                self.process.wait(timeout=grace)
+            except subprocess.TimeoutExpired:
                 pass
-            self.process.join(grace)
 
     def close(self) -> None:
         try:
-            self.process.join(0.1)
-            self.process.close()
+            if self.process.stdout is not None:
+                self.process.stdout.close()
         except Exception:
             pass
+        for p in (self.result_path, self.payload_path):
+            try:
+                p.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
-def start_solve(A, B, params: dict) -> SolveHandle:
+def _reader(stream, q):
+    """Forward the child's printed convergence rows to the parent."""
+    try:
+        for line in stream:
+            rec = parse_progress(line)
+            if rec is not None:
+                q.put(("progress", rec, 0.0))
+    except Exception:
+        pass
+
+
+def _child_command(payload: Path, result: Path) -> list[str]:
+    if getattr(sys, "frozen", False):
+        # In a bundled app sys.executable is the app itself; the entry point
+        # checks CHILD_ENV_FLAG and dispatches to the child's main().
+        return [sys.executable, str(payload), str(result)]
+    return [sys.executable, "-m", "feastpy._solve_child", str(payload), str(result)]
+
+
+def start_solve(A, B, params: dict, *, progress: bool = True) -> SolveHandle:
     """Launch a cancellable solve in a child process."""
-    # 'spawn' everywhere: it is the only option on Windows, and forking a
-    # process that has OpenMP threads and a loaded BLAS is a known way to
-    # deadlock on Linux.
-    ctx = mp.get_context("spawn")
-    q = ctx.Queue()
-    p = ctx.Process(target=_child, args=(A, B, params, q), daemon=True)
-    p.start()
-    return SolveHandle(process=p, queue=q, started=time.perf_counter())
+    tmp = Path(tempfile.mkdtemp(prefix="feastpy-"))
+    payload_path, result_path = tmp / "payload.pkl", tmp / "result.pkl"
+
+    # fpm(1)=1 makes FEAST print the convergence table we parse.
+    params = dict(params, verbose=bool(progress))
+    with payload_path.open("wb") as fh:
+        pickle.dump((A, B, params), fh, protocol=pickle.HIGHEST_PROTOCOL)
+
+    env = dict(os.environ)
+    env[CHILD_ENV_FLAG] = "1"
+    # libgfortran block-buffers a pipe, which would withhold the whole table
+    # until exit and make the progress plot useless.
+    env.setdefault("GFORTRAN_UNBUFFERED_PRECONNECTED", "y")
+    pkg_parent = str(Path(__file__).resolve().parent.parent)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [pkg_parent] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
+
+    kwargs = {}
+    if sys.platform == "win32":
+        # Without this a GUI app pops a console window for every solve.
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+    proc = subprocess.Popen(
+        _child_command(payload_path, result_path),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1, env=env, cwd=str(tmp), **kwargs)
+
+    q: Any = _queue.Queue()
+    reader = threading.Thread(target=_reader, args=(proc.stdout, q), daemon=True)
+    reader.start()
+
+    return SolveHandle(process=proc, queue=q, result_path=result_path,
+                       payload_path=payload_path, started=time.perf_counter(),
+                       reader=reader)

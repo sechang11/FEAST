@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
     QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow,
     QMessageBox, QProgressBar, QPushButton, QSpinBox, QSplitter, QTableWidget,
-    QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
+    QTableWidgetItem, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
 import feastpy
@@ -42,6 +42,7 @@ class SolveWorker(QThread):
     failed = Signal(str)
     cancelled = Signal()
     tick = Signal(float)          # seconds elapsed, for the status bar
+    progress = Signal(dict)       # one row of FEAST's convergence table
 
     def __init__(self, matrix, b_matrix, params: dict):
         super().__init__()
@@ -74,6 +75,9 @@ class SolveWorker(QThread):
             out = self.handle.poll(timeout=0.15)
             if out is None:
                 self.tick.emit(time.perf_counter() - t0)
+                continue
+            if out[0] == "progress":
+                self.progress.emit(out[1])
                 continue
             kind, payload, secs = out
             self.handle.close()
@@ -122,6 +126,7 @@ class MainWindow(QMainWindow):
         self.b_matrix = None
         self.result = None
         self.bounds = None
+        self.convergence = []
         self._syncing = False
         self.solving = False
         self.worker: SolveWorker | None = None
@@ -292,7 +297,19 @@ class MainWindow(QMainWindow):
         self.region.setZValue(-10)
         self.region.sigRegionChanged.connect(self._region_to_spins)
         self.plot.addItem(self.region)
-        rv.addWidget(self.plot, stretch=3)
+
+        self.conv_plot = pg.PlotWidget()
+        self.conv_plot.setBackground(None)
+        self.conv_plot.setLabel("bottom", "refinement loop")
+        self.conv_plot.setLabel("left", "error")
+        self.conv_plot.setLogMode(y=True)      # errors span many decades
+        self.conv_plot.showGrid(x=True, y=True, alpha=0.25)
+        self.conv_plot.addLegend(offset=(-10, 10))
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.plot, "Spectrum")
+        self.tabs.addTab(self.conv_plot, "Convergence")
+        rv.addWidget(self.tabs, stretch=3)
 
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["#", "eigenvalue", "residual"])
@@ -580,6 +597,9 @@ class MainWindow(QMainWindow):
             tol_exponent=self.tol.value(),
             max_loops=self.loops.value(),
         )
+        if not self.solving:          # a fresh solve, not an auto-retry
+            self.convergence = []
+            self.conv_plot.clear()
         self._log(f"solving on [{params['emin']:g}, {params['emax']:g}] "
                   f"with M0={params['m0']}...")
         self._set_solving(True)
@@ -590,6 +610,7 @@ class MainWindow(QMainWindow):
         self.worker.failed.connect(self.on_failed)
         self.worker.cancelled.connect(self.on_cancelled)
         self.worker.tick.connect(self.on_tick)
+        self.worker.progress.connect(self.on_progress)
         self.worker.start()
 
     def _set_solving(self, solving: bool):
@@ -601,6 +622,36 @@ class MainWindow(QMainWindow):
         for w in (self.count_btn, self.full_range_btn, self.demo_combo,
                   self.open_b_btn):
             w.setEnabled(not solving)
+
+    @Slot(dict)
+    def on_progress(self, rec: dict):
+        """One row of FEAST's convergence table arrived. Plotting these turns
+        'it is still going' into 'it is converging, and how fast'."""
+        self.convergence.append(rec)
+        loops = [r["loop"] for r in self.convergence]
+
+        # Log axis: zeros are exact convergence and cannot be plotted, so floor
+        # them just under the smallest real value rather than dropping points.
+        def series(key):
+            vals = [r[key] for r in self.convergence]
+            nz = [v for v in vals if v > 0]
+            floor = min(nz) / 10 if nz else 1e-16
+            return [v if v > 0 else floor for v in vals]
+
+        self.conv_plot.clear()
+        self.conv_plot.plot(loops, series("error_trace"), name="trace error",
+                            pen=pg.mkPen((70, 130, 220), width=2),
+                            symbol="o", symbolSize=6, symbolBrush=(70, 130, 220))
+        self.conv_plot.plot(loops, series("residual"), name="max residual",
+                            pen=pg.mkPen((220, 130, 70), width=2),
+                            symbol="t", symbolSize=6, symbolBrush=(220, 130, 70))
+        tol = 10.0 ** (-self.tol.value())
+        self.conv_plot.addLine(y=np.log10(tol),
+                               pen=pg.mkPen((150, 150, 150), style=Qt.DashLine))
+
+        self.statusBar().showMessage(
+            f"loop {rec['loop']}: {rec['n_eig']} eigenvalues, "
+            f"residual {rec['residual']:.2e}   (press Cancel to stop)")
 
     @Slot(float)
     def on_tick(self, secs: float):
@@ -736,10 +787,14 @@ class MainWindow(QMainWindow):
 
 
 def main():
-    # The solve runs in a child process, and a frozen (PyInstaller) app would
-    # otherwise relaunch the whole GUI instead of the worker.
-    import multiprocessing
-    multiprocessing.freeze_support()
+    # Solves run in a child process. In a bundled app sys.executable is this
+    # program, so the child would relaunch the GUI; the flag routes it to the
+    # worker instead. Harmless when running from source, where the child is
+    # started as `python -m feastpy._solve_child`.
+    import os
+    if getattr(sys, "frozen", False) and os.environ.get(runner.CHILD_ENV_FLAG):
+        from feastpy import _solve_child
+        return _solve_child.main(sys.argv[1:])
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)

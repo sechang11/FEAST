@@ -94,6 +94,29 @@ def _poll():
         w.grab().save(str(OUT))
         print(f"screenshot: {OUT}")
 
+        # --- convergence history --------------------------------------------
+        # Parsed live out of FEAST's printed table while the solve ran.
+        conv = w.convergence
+        check("convergence rows captured", len(conv) > 0, f"{len(conv)} rows")
+        if conv:
+            print(f"  loops {conv[0]['loop']}..{conv[-1]['loop']}, "
+                  f"trace error {conv[0]['error_trace']:.2e} -> {conv[-1]['error_trace']:.2e}")
+            check("one row per reported loop",
+                  [c["loop"] for c in conv] == sorted(c["loop"] for c in conv),
+                  "loops arrive in order")
+            check("error actually decreases",
+                  conv[-1]["error_trace"] < conv[0]["error_trace"],
+                  f"{conv[0]['error_trace']:.2e} -> {conv[-1]['error_trace']:.2e}")
+            check("loop count matches the result",
+                  abs(len(conv) - (r.loops + 1)) <= 1,
+                  f"{len(conv)} rows vs result.loops={r.loops}")
+            # show the tab we just populated
+            w.tabs.setCurrentIndex(1)
+            app.processEvents()
+            w.grab().save(str(OUT.with_name(OUT.stem + "_convergence.png")))
+            print(f"screenshot: {OUT.with_name(OUT.stem + '_convergence.png')}")
+            w.tabs.setCurrentIndex(0)
+
         # --- generalized problem: FEAST's own system1 sample ---------------
         # The upstream driver finds 16 eigenvalues in [0.18, 1.0]; the GUI must
         # agree, which also proves the B matrix reaches the solver.
