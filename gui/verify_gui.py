@@ -114,6 +114,30 @@ def poll():
             print( "  upstream 0.216788800187194 .. 0.989790599324303")
         w.grab().save(str(OUT.with_name(OUT.stem + "_generalized.png")))
         print(f"screenshot: {OUT.with_name(OUT.stem + '_generalized.png')}")
+
+        # --- export ---------------------------------------------------------
+        # Drive the app's own export path (not results_io directly) by stubbing
+        # the file dialog, so the GUI wiring is what gets tested.
+        print("\nexport:")
+        import tempfile, numpy as np
+        from PySide6.QtWidgets import QFileDialog
+        from feastpy import results_io
+
+        tmp = Path(tempfile.mkdtemp())
+        for fmt_key, label, ext in results_io.FORMATS:
+            target = tmp / f"out_{fmt_key}{ext}"
+            QFileDialog.getSaveFileName = staticmethod(
+                lambda *a, _t=target, _l=label, **k: (str(_t), _l))
+            w.export_csv()
+            written = target if target.exists() else target.with_suffix(ext)
+            check(f"export {fmt_key}", written.exists(),
+                  f"{written.name} {written.stat().st_size:,}B" if written.exists() else "missing")
+
+        with np.load(tmp / "out_npz.npz") as d:
+            check("exported npz carries eigenvectors",
+                  d["eigenvectors"].shape == (r.eigenvectors.shape[0], r.n_found),
+                  f"shape={d['eigenvectors'].shape}")
+
         finish()
         return
 

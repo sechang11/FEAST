@@ -1,5 +1,6 @@
 """Checks the ctypes binding against problems with known answers."""
 import numpy as np
+import scipy.io
 import scipy.sparse as sp
 
 import tempfile, os
@@ -143,6 +144,71 @@ results.append(check("spd check accepts identity",
 results.append(check("spd check rejects negative diagonal",
                      not matrixio.is_probably_spd(sp.diags([np.full(50, -1.0)], [0],
                                                            format="csr"))))
+
+# --- exporting results --------------------------------------------------------
+from feastpy import results_io
+
+with tempfile.TemporaryDirectory() as td:
+    rr = feastpy.eigh_interval(laplacian(), 0.0, 0.05, m0=20)
+
+    # npz must round-trip the eigenvectors exactly -- it is the format users
+    # will actually compute with.
+    npz_path = results_io.save_results(os.path.join(td, "out.npz"), rr, "npz",
+                                       emin=0.0, emax=0.05)
+    # NpzFile holds the zip open; on Windows that blocks the TemporaryDirectory
+    # cleanup, so close it explicitly.
+    with np.load(npz_path) as d:
+        results.append(check("npz round-trips eigenvectors",
+                             np.array_equal(d["eigenvectors"], rr.eigenvectors)
+                             and np.array_equal(d["eigenvalues"], rr.eigenvalues),
+                             f"shape={d['eigenvectors'].shape}"))
+        results.append(check("npz records the interval",
+                             float(d["emin"]) == 0.0 and float(d["emax"]) == 0.05))
+
+    # eigenvalue-only CSV
+    v_path = results_io.save_results(os.path.join(td, "v.csv"), rr, "values-csv")
+    lines = open(v_path).read().strip().splitlines()
+    results.append(check("values CSV has a row per eigenvalue",
+                         len(lines) == rr.n_found + 1, f"{len(lines)} lines"))
+    # Parse it, don't just count lines: NumPy 2 reprs like "np.float64(0.5)"
+    # pass a line count but are unreadable by every CSV tool.
+    parsed = np.array([float(l.split(",")[1]) for l in lines[1:]])
+    results.append(check("values CSV is machine-readable",
+                         np.allclose(parsed, rr.eigenvalues),
+                         f"max diff {np.max(np.abs(parsed - rr.eigenvalues)):.2e}"))
+
+    # eigenvector CSV: one column per eigenvalue, one row per component
+    vec_path = results_io.save_results(os.path.join(td, "vec.csv"), rr, "vectors-csv")
+    rows = open(vec_path).read().strip().splitlines()
+    body = rows[3:]
+    ok = len(body) == N and len(body[0].split(",")) == rr.n_found + 1
+    results.append(check("vector CSV is n x m", ok,
+                         f"{len(body)} rows x {len(body[0].split(','))-1} vectors"))
+    # values must survive the text round-trip
+    first_col = np.array([float(l.split(",")[1]) for l in body])
+    results.append(check("vector CSV values round-trip",
+                         np.allclose(first_col, rr.eigenvectors[:, 0]),
+                         f"max diff {np.max(np.abs(first_col - rr.eigenvectors[:, 0])):.2e}"))
+
+    mtx_path = results_io.save_results(os.path.join(td, "vec.mtx"), rr, "mtx")
+    back = scipy.io.mmread(str(mtx_path))
+    results.append(check("Matrix Market eigenvectors round-trip",
+                         np.allclose(np.asarray(back), rr.eigenvectors),
+                         f"shape={np.asarray(back).shape}"))
+
+    # complex eigenvectors need re/im columns rather than silently losing the
+    # imaginary part
+    cvec = results_io.save_results(os.path.join(td, "c.csv"), rh, "vectors-csv")
+    head = open(cvec).read().splitlines()[2]
+    results.append(check("complex CSV splits re/im",
+                         "re_1" in head and "im_1" in head, head[:40]))
+
+    try:
+        empty_r = feastpy.eigh_interval(laplacian(), 100.0, 200.0, m0=5)
+        results_io.save_results(os.path.join(td, "e.npz"), empty_r, "npz")
+        results.append(check("exporting nothing is refused", False, "no error"))
+    except ValueError:
+        results.append(check("exporting nothing is refused", True))
 
 # --- error handling ----------------------------------------------------------
 empty = feastpy.eigh_interval(laplacian(), 100.0, 200.0, m0=5)

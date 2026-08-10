@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 import feastpy
-from feastpy import matrixio
+from feastpy import matrixio, results_io
 
 APP_NAME = "FEAST Eigensolver"
 
@@ -229,7 +229,7 @@ class MainWindow(QMainWindow):
         self.progress.hide()
         lv.addWidget(self.progress)
 
-        self.export_btn = QPushButton("Export results (CSV)...")
+        self.export_btn = QPushButton("Export results...")
         self.export_btn.clicked.connect(self.export_csv)
         self.export_btn.setEnabled(False)
         lv.addWidget(self.export_btn)
@@ -611,19 +611,46 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def export_csv(self):
+        """Export results. The format picker is the file-type filter."""
         if self.result is None or not self.result.n_found:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Export results",
-                                              "eigenvalues.csv", "CSV (*.csv)")
+
+        path, selected = QFileDialog.getSaveFileName(
+            self, "Export results", "eigen_results.npz", results_io.FORMAT_LABELS)
         if not path:
             return
-        r = self.result
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write("index,eigenvalue,residual\n")
-            for i in range(r.n_found):
-                fh.write(f"{i + 1},{r.eigenvalues[i]!r},{r.residuals[i]!r}\n")
-        self._log(f"wrote {path}")
-        self.statusBar().showMessage(f"exported to {path}")
+
+        fmt = results_io.format_for_label(selected)
+        path = Path(path)
+        if not path.suffix:
+            path = path.with_suffix(results_io.extension_for(fmt))
+
+        # A dense eigenvector block is n x m; as text that gets big enough to
+        # be worth a warning rather than a surprise.
+        cells = results_io.estimate_cells(self.result, fmt)
+        if fmt in ("vectors-csv", "mtx") and cells > 2_000_000:
+            ans = QMessageBox.question(
+                self, APP_NAME,
+                f"This writes about {cells:,} numbers as text, which may be slow "
+                "and produce a very large file.\n\n"
+                "The NumPy (.npz) format stores the same data compressed. "
+                "Continue anyway?")
+            if ans != QMessageBox.Yes:
+                return
+
+        try:
+            written = results_io.save_results(path, self.result, fmt,
+                                              emin=self.emin.value(),
+                                              emax=self.emax.value())
+        except Exception as exc:
+            QMessageBox.critical(self, APP_NAME, f"Export failed:\n\n{exc}")
+            self._log(f"  ERROR export: {exc}")
+            return
+
+        what = ("eigenvalues only" if fmt == "values-csv"
+                else f"{self.result.n_found} eigenvalues + eigenvectors")
+        self._log(f"wrote {written}  ({what})")
+        self.statusBar().showMessage(f"exported {what} to {written}")
 
     def about(self):
         QMessageBox.about(
