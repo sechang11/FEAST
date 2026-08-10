@@ -29,6 +29,42 @@ FEAST does not bundle. See "Not reachable" below.
 | Dense Hermitian | 12 | 12 | `eigh_interval` |
 | Non-Hermitian | 10 | 10 | `eig_disc` |
 
+## Upstream's own examples
+
+FEAST ships 36 example programs and 2 driver utilities. Run them against our
+library with:
+
+```bash
+bash tools/run_examples.sh
+```
+
+Result on Windows and Linux, identical on both: **24 pass unmodified, 2 fail,
+10 skipped.**
+
+| Group | Result |
+|---|---|
+| dense (12: C and Fortran, sy/he/ge/pev, ev/gv/x) | all pass |
+| sparse (12 of 14) | pass |
+| sparse polynomial (`dfeast_scsrpev`, C and Fortran) | `info=2`, no convergence |
+| banded (10) | skipped: needs SPIKE |
+| PFEAST (44, in the other example directories) | skipped: needs MPI |
+
+The two failures are the same program in two languages, and they are a
+consequence of building without MKL rather than a defect. `dzfeast_pev_sparse.f90`
+describes itself as *"EXPERT ROUTINE (CORE) - using MKL-PARDISO"* and guards the
+solver with `#ifdef MKL`; upstream's own Makefile states that with `MKL=no`,
+"MKL-PARDISO ... will not be available for the FEAST sparse interfaces". Raising
+the refinement loops to 100 and the contour points to 16 does not fix it, which
+is consistent with a missing direct solver rather than slow convergence.
+
+To confirm that reading and to get the sparse polynomial interfaces working,
+build against Intel oneAPI with `build/build-feast.sh --mkl`. That has not been
+tried here.
+
+The `utility/` driver (`driver_feast_sparse`) builds and runs correctly; see
+RUNNING-THE-ORIGINAL.md, where it is used as the reference the app is checked
+against.
+
 ## Two layers
 
 **Ergonomic** — `eigh_interval` (Hermitian, real interval), `eigsh_interval`
