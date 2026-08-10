@@ -90,36 +90,52 @@ the window stays responsive.
 
 ## Status
 
-All four targets build and pass the analytic test in CI.
+All four targets build the library, pass the analytic test, pass the `feastpy`
+binding tests, and pass the headless GUI check — in CI, on every push.
 
-| Target | Library | `run-test.sh` | `feastpy` (7 tests) | GUI |
+| Target | Library | `run-test.sh` | `feastpy` | GUI check |
 |---|---|---|---|---|
-| windows-x64 | CI + local | 1.7e-16 | 7/7 local | verified local |
-| linux-x64 | CI + local | 2.0e-16 | 7/7 local | verified local |
-| macos-arm64 | CI | 1.9e-16 | not yet run | not yet run |
-| macos-x64 | CI | CI pass | not yet run | not yet run |
+| windows-x64 | CI + local | 1.7e-16 | 35/35 | pass |
+| linux-x64 | CI + local | 2.0e-16 | 35/35 | pass |
+| macos-arm64 | CI | 1.9e-16 | 35/35 | pass |
+| macos-x64 | CI | pass | 35/35 | pass |
 | macos-universal | `lipo` of both | — | — | — |
 
-The universal dylib was checked at the Mach-O level, not just assumed from a
-green job: it is a FAT binary with two slices, `x86_64` (890 KB) and `arm64`
-(744 KB).
+The GUI check is not a smoke test: it drives spectral bounds, the count
+estimate, the interval band, a solve, the convergence capture, the generalized
+`system1` problem (asserting the same 16 eigenvalues the upstream driver
+finds), all four export formats, code generation (running the generated Python
+and compiling the generated C), cancellation (asserting the child process is
+gone), and the diagnose-and-fix loop. Screenshots are uploaded as artifacts.
 
-Linux was verified on a Fedora 44 box using a conda-forge toolchain in
+The universal dylib is checked at the Mach-O level rather than assumed from a
+green job: CI asserts both `x86_64` and `arm64` slices are present.
+
+### Platform differences worth knowing
+
+- **An undersized `M0` does not produce the same status code everywhere.**
+  OpenBLAS returns `info=3` ("subspace too small"); Apple Silicon's Accelerate
+  returns `info=1` ("no eigenvalue found") for identical input. Do not assert
+  on the code — assert on the behaviour. `diagnose()` leads with the `M0` fix
+  when `M0` is implausibly small, so `info=1` does not misdirect the user.
+- **Windows needs the mingw DLL directory declared.** CPython 3.8+ does not
+  consult `PATH` for a loaded DLL's dependencies. `feastpy` reads
+  `FEAST_DLL_DIR`; CI sets it because the runners put MSYS2 under `RUNNER_TEMP`
+  rather than `C:\msys64`.
+- **Apple's clang rejects `-fopenmp`** and does not know where `libgfortran`
+  lives, so C is compiled with `cc` and linked with `gfortran`.
+- **Use `macos-15-intel`, not `macos-13`.** That image was retired, and jobs
+  requesting it queue forever rather than failing — which reads as a runner
+  backlog instead of a bad label.
+
+Linux was also verified on a Fedora 44 box using a conda-forge toolchain in
 `$HOME` (no root needed) — `micromamba create -p ~/feastenv -c conda-forge
-gfortran openblas python numpy scipy pyside6 pyqtgraph` — which is a useful
-recipe when you cannot install system packages.
+gfortran openblas python numpy scipy pyside6 pyqtgraph` — a useful recipe when
+you cannot install system packages.
 
-### Still unverified
+### Still to do
 
-- `feastpy` and the GUI have **not** been exercised on either macOS
-  architecture. A green library job does not prove the ctypes layer finds and
-  loads the dylib; that is exactly where the `AMD64` vs `x86_64` arch-detection
-  bug showed up on Windows.
-- Nothing is signed or notarized, so macOS will refuse the app on first launch
-  until it is (`xattr -dr com.apple.quarantine` to test before then).
-
-### Runner note
-
-Use `macos-15-intel`, not `macos-13`, for the Intel build. The `macos-13` image
-was retired; jobs requesting it queue forever rather than failing, which reads
-as a runner backlog instead of a bad label.
+Nothing is signed or notarized, so macOS will refuse the app on first launch
+until it is (`xattr -dr com.apple.quarantine` to test before then), and Windows
+will show a SmartScreen warning. Packaging (PyInstaller/NSIS/DMG) has not
+started.
