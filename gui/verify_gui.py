@@ -15,10 +15,10 @@ from app import MainWindow  # noqa: E402
 
 OUT = Path(sys.argv[1] if len(sys.argv) > 1 else "gui_verify.png")
 
-app = QApplication(sys.argv)
-w = MainWindow()
-w.show()
-
+# Assigned in main(). Nothing may run at import time: the solve happens in a
+# child process started with 'spawn', and that child re-imports this module.
+app = None
+w = None
 state = {"phase": "start", "ticks": 0}
 failures = []
 
@@ -55,6 +55,18 @@ def start():
 
 
 def poll():
+    """Timer tick. Wrapped so a bug in the harness fails the run instead of
+    raising every 500ms forever, which looks like a hang with no output."""
+    try:
+        _poll()
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        check("verification harness ran without error", False)
+        finish()
+
+
+def _poll():
     state["ticks"] += 1
 
     if state["phase"] == "counting":
@@ -138,7 +150,53 @@ def poll():
                   d["eigenvectors"].shape == (r.eigenvectors.shape[0], r.n_found),
                   f"shape={d['eigenvectors'].shape}")
 
-        finish()
+        # --- cancel ---------------------------------------------------------
+        # Start a deliberately slow solve (whole spectrum of the 2-D Laplacian,
+        # big subspace) and stop it. The point is that the native work really
+        # ends, not just that the UI stops showing it.
+        print("\ncancel:")
+        names = [w.demo_combo.itemText(i) for i in range(w.demo_combo.count())]
+        w.demo_combo.setCurrentText([n for n in names if "2-D" in n][0])
+        w.use_full_range()
+        w.m0.setValue(600)
+        w.result = None
+        state["phase"] = "cancelling"
+        state["ticks"] = 0
+        w.solve()
+        check("button switches to Cancel", w.solve_btn.text() == "Cancel",
+              f"text={w.solve_btn.text()!r}")
+        check("solve is running", w.worker is not None and w.worker.isRunning())
+        return
+
+    if state["phase"] == "cancelling":
+        if state["ticks"] == 2:                 # let it get properly underway
+            proc = w.worker.handle.process if w.worker.handle else None
+            state["pid"] = proc.pid if proc else None
+            print(f"  solver process pid={state.get('pid')}")
+            check("solver runs in its own process", state.get("pid") is not None)
+            w.cancel_solve()
+            return
+        if state["ticks"] > 2:
+            if w.worker is not None and w.worker.isRunning():
+                if state["ticks"] > 40:
+                    check("cancel stops the solve", False, "worker still running")
+                    finish()
+                return
+            check("cancel stops the solve", True)
+            check("no result recorded after cancel", w.result is None)
+            check("button returns to Solve", w.solve_btn.text() == "Solve",
+                  f"text={w.solve_btn.text()!r}")
+            check("controls re-enabled", w.count_btn.isEnabled())
+            # The child must actually be gone, not merely detached. Ask the OS:
+            # the Process object is closed by then, so is_alive() would raise.
+            pid = state.get("pid")
+            try:
+                import psutil
+                alive = psutil.pid_exists(pid) if pid is not None else False
+                check("solver process terminated", not alive, f"pid={pid}")
+            except ImportError:
+                print("  SKIP  solver process terminated (psutil not installed)")
+            finish()
         return
 
     if state["ticks"] > 160:
@@ -147,6 +205,21 @@ def poll():
         app.exit(1)
 
 
-QTimer.singleShot(600, start)
-t = QTimer(); t.timeout.connect(poll); t.start(500)
-sys.exit(app.exec())
+def main():
+    global app, w
+    import multiprocessing
+    multiprocessing.freeze_support()
+
+    app = QApplication(sys.argv)
+    w = MainWindow()
+    w.show()
+
+    QTimer.singleShot(600, start)
+    t = QTimer()
+    t.timeout.connect(poll)
+    t.start(500)
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

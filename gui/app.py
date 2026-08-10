@@ -24,33 +24,66 @@ from PySide6.QtWidgets import (
 )
 
 import feastpy
-from feastpy import matrixio, results_io
+from feastpy import matrixio, results_io, runner
 
 APP_NAME = "FEAST Eigensolver"
 
 
 class SolveWorker(QThread):
-    """Runs one FEAST solve off the UI thread."""
+    """Supervises one FEAST solve.
+
+    The solve itself runs in a child process (see feastpy.runner): a FEAST call
+    is one blocking trip into Fortran with no abort hook, so terminating the
+    process is the only way to make Cancel actually stop the work rather than
+    just hiding it. This thread waits on that process and keeps the UI live.
+    """
 
     finished_ok = Signal(object, float)
     failed = Signal(str)
+    cancelled = Signal()
+    tick = Signal(float)          # seconds elapsed, for the status bar
 
-    def __init__(self, matrix, params: dict):
+    def __init__(self, matrix, b_matrix, params: dict):
         super().__init__()
         self.matrix = matrix
+        self.b_matrix = b_matrix
         self.params = params
+        self.handle = None
+        self._cancel = False
+
+    def cancel(self):
+        self._cancel = True
+        if self.handle is not None:
+            self.handle.cancel()
 
     def run(self):
         import time
         try:
-            t0 = time.perf_counter()
-            if sp.issparse(self.matrix):
-                r = feastpy.eigsh_interval(self.matrix, **self.params)
+            self.handle = runner.start_solve(self.matrix, self.b_matrix, self.params)
+        except Exception as exc:
+            self.failed.emit(f"could not start solver process: {exc}")
+            return
+
+        t0 = time.perf_counter()
+        while True:
+            if self._cancel:
+                self.handle.cancel()
+                self.handle.close()
+                self.cancelled.emit()
+                return
+            out = self.handle.poll(timeout=0.15)
+            if out is None:
+                self.tick.emit(time.perf_counter() - t0)
+                continue
+            kind, payload, secs = out
+            self.handle.close()
+            if self._cancel:              # finished as we were cancelling
+                self.cancelled.emit()
+            elif kind == "ok":
+                self.finished_ok.emit(payload, secs)
             else:
-                r = feastpy.eigh_interval(self.matrix, **self.params)
-            self.finished_ok.emit(r, time.perf_counter() - t0)
-        except Exception as exc:  # surfaced in the log pane, not a crash
-            self.failed.emit(f"{type(exc).__name__}: {exc}")
+                self.failed.emit(payload)
+            return
 
 
 class CountWorker(QThread):
@@ -90,6 +123,7 @@ class MainWindow(QMainWindow):
         self.result = None
         self.bounds = None
         self._syncing = False
+        self.solving = False
         self.worker: SolveWorker | None = None
         self.counter: CountWorker | None = None
 
@@ -221,7 +255,7 @@ class MainWindow(QMainWindow):
         self.solve_btn = QPushButton("Solve")
         self.solve_btn.setMinimumHeight(38)
         f = QFont(); f.setBold(True); self.solve_btn.setFont(f)
-        self.solve_btn.clicked.connect(self.solve)
+        self.solve_btn.clicked.connect(self.on_solve_button)
         lv.addWidget(self.solve_btn)
 
         self.progress = QProgressBar()
@@ -523,6 +557,14 @@ class MainWindow(QMainWindow):
                     QMessageBox.warning(self, APP_NAME, str(exc))
 
     @Slot()
+    def on_solve_button(self):
+        """The Solve button becomes Cancel while a solve is running."""
+        if self.solving:
+            self.cancel_solve()
+        else:
+            self.solve()
+
+    @Slot()
     def solve(self):
         if self.matrix is None:
             return
@@ -540,15 +582,45 @@ class MainWindow(QMainWindow):
         )
         self._log(f"solving on [{params['emin']:g}, {params['emax']:g}] "
                   f"with M0={params['m0']}...")
-        self.solve_btn.setEnabled(False)
-        self.progress.show()
+        self._set_solving(True)
         self.statusBar().showMessage("solving...")
 
-        params["B"] = self.b_matrix
-        self.worker = SolveWorker(self.matrix, params)
+        self.worker = SolveWorker(self.matrix, self.b_matrix, params)
         self.worker.finished_ok.connect(self.on_solved)
         self.worker.failed.connect(self.on_failed)
+        self.worker.cancelled.connect(self.on_cancelled)
+        self.worker.tick.connect(self.on_tick)
         self.worker.start()
+
+    def _set_solving(self, solving: bool):
+        """Swap Solve for Cancel; they are the same button so the action is
+        always where the user just clicked."""
+        self.solving = solving
+        self.solve_btn.setText("Cancel" if solving else "Solve")
+        self.progress.setVisible(solving)
+        for w in (self.count_btn, self.full_range_btn, self.demo_combo,
+                  self.open_b_btn):
+            w.setEnabled(not solving)
+
+    @Slot(float)
+    def on_tick(self, secs: float):
+        self.statusBar().showMessage(f"solving... {secs:.1f}s   (press Cancel to stop)")
+
+    @Slot()
+    def cancel_solve(self):
+        if self.worker is None:
+            return
+        self._log("  cancelling...")
+        self.statusBar().showMessage("cancelling...")
+        self.solve_btn.setEnabled(False)
+        self.worker.cancel()
+
+    @Slot()
+    def on_cancelled(self):
+        self.solve_btn.setEnabled(True)
+        self._set_solving(False)
+        self._log("  cancelled")
+        self.statusBar().showMessage("cancelled")
 
     @Slot(object, float)
     def on_solved(self, r, secs: float):
@@ -559,10 +631,11 @@ class MainWindow(QMainWindow):
             if new_m0 > self.m0.value():
                 self._log(f"  M0 too small; retrying with M0={new_m0}")
                 self.m0.setValue(new_m0)
+                self._set_solving(False)
                 self.solve()
                 return
 
-        self.progress.hide()
+        self._set_solving(False)
         self.solve_btn.setEnabled(True)
         self.result = r
 
@@ -603,7 +676,7 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def on_failed(self, msg: str):
-        self.progress.hide()
+        self._set_solving(False)
         self.solve_btn.setEnabled(True)
         self.statusBar().showMessage("failed")
         self._log(f"  ERROR {msg}")
@@ -663,6 +736,11 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    # The solve runs in a child process, and a frozen (PyInstaller) app would
+    # otherwise relaunch the whole GUI instead of the worker.
+    import multiprocessing
+    multiprocessing.freeze_support()
+
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     w = MainWindow()
