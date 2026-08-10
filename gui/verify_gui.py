@@ -4,14 +4,16 @@ without a human clicking anything.
 Exercises the whole intended flow: load -> spectral bounds -> estimate count
 (which sets M0) -> drag the interval band -> solve.
 """
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from app import MainWindow  # noqa: E402
+from app import CodeDialog, MainWindow  # noqa: E402
 
 OUT = Path(sys.argv[1] if len(sys.argv) > 1 else "gui_verify.png")
 
@@ -172,6 +174,65 @@ def _poll():
             check("exported npz carries eigenvectors",
                   d["eigenvectors"].shape == (r.eigenvectors.shape[0], r.n_found),
                   f"shape={d['eigenvectors'].shape}")
+
+        # --- copy as code ---------------------------------------------------
+        # Generate through the app's own dialog, then prove the output is real
+        # by running the Python and compiling the C.
+        print("\ncopy as code:")
+        import subprocess
+        from feastpy import codegen
+
+        dlg = CodeDialog(w._code_spec(), w)
+        langs = [dlg.lang.itemText(i) for i in range(dlg.lang.count())]
+        check("both languages offered", len(langs) == 2, ", ".join(langs))
+
+        generated = {}
+        for i, lang in enumerate(langs):
+            dlg.lang.setCurrentIndex(i)
+            generated[lang] = dlg.text.toPlainText()
+            check(f"{lang} generated", len(generated[lang]) > 200,
+                  f"{len(generated[lang])} chars")
+        check("routine name shown", "difeast_scsrgv" in dlg.routine.text(),
+              dlg.routine.text())
+
+        dlg.show()
+        app.processEvents()
+        dlg.grab().save(str(OUT.with_name(OUT.stem + "_code.png")))
+        print(f"screenshot: {OUT.with_name(OUT.stem + '_code.png')}")
+        dlg.copy()
+        from PySide6.QtWidgets import QApplication as _QA
+        check("clipboard populated",
+              _QA.clipboard().text() == generated[langs[dlg.lang.currentIndex()]])
+        dlg.close()
+
+        code_dir = Path(tempfile.mkdtemp())
+        py_src = next(v for k, v in generated.items() if k.startswith("Python"))
+        (code_dir / "gen.py").write_text(py_src, encoding="utf-8")
+        env = dict(os.environ,
+                   PYTHONPATH=str(Path(__file__).resolve().parent.parent / "python"))
+        pr = subprocess.run([sys.executable, str(code_dir / "gen.py")],
+                            capture_output=True, text=True, env=env, timeout=300)
+        check("generated Python runs", pr.returncode == 0,
+              (pr.stdout or pr.stderr).strip().splitlines()[-1][:70] if (pr.stdout or pr.stderr) else "")
+        check("generated Python finds the same 16 eigenvalues",
+              "found 16 eigenvalues" in pr.stdout, pr.stdout.strip()[:60])
+
+        c_src = generated["C"]
+        (code_dir / "gen.c").write_text(c_src, encoding="utf-8")
+        root = Path(__file__).resolve().parent.parent
+        arch = "windows-x64" if sys.platform == "win32" else "linux-x64"
+        lib = root / "4.0" / "lib" / arch / "libfeast.a"
+        if lib.exists():
+            blas = ["-lopenblas"] if sys.platform != "darwin" else ["-framework", "Accelerate"]
+            cr = subprocess.run(
+                ["gcc", "-O2", "-o", str(code_dir / "gen.exe"), str(code_dir / "gen.c"),
+                 "-I", str(root / "4.0" / "include"), str(lib),
+                 *blas, "-lgfortran", "-fopenmp", "-lm"],
+                capture_output=True, text=True, timeout=300)
+            check("generated C compiles and links", cr.returncode == 0,
+                  cr.stderr.strip().splitlines()[-1][:70] if cr.returncode else "")
+        else:
+            print(f"  SKIP  generated C compiles (no {lib})")
 
         # --- cancel ---------------------------------------------------------
         # Start a deliberately slow solve (whole spectrum of the 2-D Laplacian,

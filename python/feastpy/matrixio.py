@@ -176,12 +176,29 @@ def is_probably_spd(B, samples: int = 12) -> bool:
     return True
 
 
+DATA_DIR = Path(__file__).resolve().parent.parent.parent / "4.0" / "utility" / "data"
+
+
 def _feast_sample(name: str):
     """Load one of the matrix pairs FEAST ships in 4.0/utility/data."""
-    data = Path(__file__).resolve().parent.parent.parent / "4.0" / "utility" / "data"
-    A = load_matrix(data / f"{name}.mtx")
-    bpath = data / f"{name}B.mtx"
+    A = load_matrix(DATA_DIR / f"{name}.mtx")
+    bpath = DATA_DIR / f"{name}B.mtx"
     return (A, load_matrix(bpath)) if bpath.exists() else A
+
+
+def demo_paths(demo_name: str):
+    """Files behind a built-in demo, or (None, None) if it is generated.
+
+    Generated code has to load the same matrices, so a demo backed by files on
+    disk should say where they are instead of emitting a placeholder.
+    """
+    for sample in ("system1", "system3"):
+        if sample in demo_name:
+            a = DATA_DIR / f"{sample}.mtx"
+            b = DATA_DIR / f"{sample}B.mtx"
+            return (str(a) if a.exists() else None,
+                    str(b) if b.exists() else None)
+    return (None, None)
 
 
 # Each entry is (builder, emin, emax). The builder returns either A, or an

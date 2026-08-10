@@ -14,17 +14,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 import numpy as np
 import pyqtgraph as pg
 import scipy.sparse as sp
-from PySide6.QtCore import Qt, QThread, Signal, Slot
+from PySide6.QtCore import Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QFont
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
+    QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog,
     QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow,
     QMessageBox, QProgressBar, QPushButton, QSpinBox, QSplitter, QTableWidget,
     QTableWidgetItem, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
 import feastpy
-from feastpy import matrixio, results_io, runner
+from feastpy import codegen, matrixio, results_io, runner
 
 APP_NAME = "FEAST Eigensolver"
 
@@ -116,6 +116,72 @@ class CountWorker(QThread):
             self.failed.emit(f"{type(exc).__name__}: {exc}")
 
 
+class CodeDialog(QDialog):
+    """Shows the current problem as source code.
+
+    Displayed rather than copied silently: users need to read it before trusting
+    it, and it doubles as documentation of which FEAST routine the settings map
+    to -- the part that is easy to get wrong by hand.
+    """
+
+    def __init__(self, spec, parent=None):
+        super().__init__(parent)
+        self.spec = spec
+        self.setWindowTitle("Copy as code")
+        self.resize(820, 620)
+
+        lay = QVBoxLayout(self)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Language:"))
+        self.lang = QComboBox()
+        self.lang.addItems(list(codegen.GENERATORS.keys()))
+        self.lang.currentIndexChanged.connect(self.regenerate)
+        row.addWidget(self.lang)
+        row.addStretch(1)
+        self.routine = QLabel()
+        self.routine.setStyleSheet("color: palette(text); font-size: 11px;")
+        row.addWidget(self.routine)
+        lay.addLayout(row)
+
+        self.text = QTextEdit()
+        self.text.setReadOnly(True)
+        self.text.setLineWrapMode(QTextEdit.NoWrap)
+        self.text.setFont(QFont("Consolas" if sys.platform == "win32" else "Menlo", 10))
+        lay.addWidget(self.text, stretch=1)
+
+        buttons = QHBoxLayout()
+        self.copy_btn = QPushButton("Copy to clipboard")
+        self.copy_btn.clicked.connect(self.copy)
+        buttons.addWidget(self.copy_btn)
+        save_btn = QPushButton("Save as...")
+        save_btn.clicked.connect(self.save)
+        buttons.addWidget(save_btn)
+        buttons.addStretch(1)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        buttons.addWidget(close_btn)
+        lay.addLayout(buttons)
+
+        self.regenerate()
+
+    def regenerate(self):
+        gen = codegen.GENERATORS[self.lang.currentText()]
+        self.text.setPlainText(gen(self.spec))
+        self.routine.setText(f"FEAST routine: {codegen.routine_name(self.spec)}")
+
+    def copy(self):
+        QApplication.clipboard().setText(self.text.toPlainText())
+        self.copy_btn.setText("Copied")
+        QTimer.singleShot(1200, lambda: self.copy_btn.setText("Copy to clipboard"))
+
+    def save(self):
+        ext = ".py" if self.lang.currentText().startswith("Python") else ".c"
+        path, _ = QFileDialog.getSaveFileName(self, "Save code", f"feast_solve{ext}",
+                                              f"Source (*{ext})")
+        if path:
+            Path(path).write_text(self.text.toPlainText(), encoding="utf-8")
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -124,6 +190,8 @@ class MainWindow(QMainWindow):
 
         self.matrix = None
         self.b_matrix = None
+        self.matrix_path = None
+        self.b_path = None
         self.result = None
         self.bounds = None
         self.convergence = []
@@ -267,6 +335,12 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 0)
         self.progress.hide()
         lv.addWidget(self.progress)
+
+        self.code_btn = QPushButton("Copy as code...")
+        self.code_btn.setToolTip("Emit this exact problem as a runnable Python "
+                                 "or C program.")
+        self.code_btn.clicked.connect(self.show_code)
+        lv.addWidget(self.code_btn)
 
         self.export_btn = QPushButton("Export results...")
         self.export_btn.clicked.connect(self.export_csv)
@@ -457,6 +531,9 @@ class MainWindow(QMainWindow):
         name = self.demo_combo.currentText()
         build, emin, emax = matrixio.DEMOS[name]
         built = build()
+        # Demos backed by files on disk report their paths so generated code
+        # can load the same matrices; generated ones leave a placeholder.
+        self.matrix_path, self.b_path = matrixio.demo_paths(name)
         self.b_matrix = None
         self.clear_b_btn.setEnabled(False)
         self.b_label.setText("no B - standard problem A x = λ x")
@@ -468,7 +545,9 @@ class MainWindow(QMainWindow):
         self.emax.setValue(emax)
         self.matrix_label.setText(matrixio.describe(self.matrix))
         if b is not None:
+            demo_b = self.b_path
             self._set_b(b, "paired with demo")
+            self.b_path = demo_b
         self._update_spectrum_view()
         self._log(f"loaded demo: {name}")
 
@@ -524,7 +603,8 @@ class MainWindow(QMainWindow):
             B = matrixio.load_matrix(path)
         except matrixio.MatrixLoadError as exc:
             QMessageBox.warning(self, APP_NAME, str(exc)); return
-        self._set_b(B, Path(path).name)
+        if self._set_b(B, Path(path).name):
+            self.b_path = path
 
     @Slot()
     def open_file(self):
@@ -552,7 +632,9 @@ class MainWindow(QMainWindow):
             return
 
         self.matrix = M
+        self.matrix_path = path
         self.b_matrix = None
+        self.b_path = None
         self.clear_b_btn.setEnabled(False)
         self.b_label.setText("no B - standard problem A x = λ x")
         self.matrix_label.setText(matrixio.describe(M))
@@ -569,7 +651,8 @@ class MainWindow(QMainWindow):
                 "Load it as B and solve the generalized problem A x = λ B x?")
             if ans == QMessageBox.Yes:
                 try:
-                    self._set_b(matrixio.load_matrix(partner), partner.name)
+                    if self._set_b(matrixio.load_matrix(partner), partner.name):
+                        self.b_path = str(partner)
                 except matrixio.MatrixLoadError as exc:
                     QMessageBox.warning(self, APP_NAME, str(exc))
 
@@ -732,6 +815,30 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("failed")
         self._log(f"  ERROR {msg}")
         QMessageBox.critical(self, APP_NAME, msg)
+
+    def _code_spec(self):
+        """The current problem as a ProblemSpec."""
+        return codegen.ProblemSpec(
+            n=int(self.matrix.shape[0]),
+            sparse=sp.issparse(self.matrix),
+            complex=bool(np.iscomplexobj(self.matrix.data if sp.issparse(self.matrix)
+                                         else self.matrix)),
+            generalized=self.b_matrix is not None,
+            # Mirror the defaults feastpy uses for each path, so the generated
+            # code reproduces this run rather than a differently-stored one.
+            uplo="U" if sp.issparse(self.matrix) else "F",
+            emin=self.emin.value(), emax=self.emax.value(),
+            m0=self.m0.value(), contour_points=self.contour.value(),
+            tol_exponent=self.tol.value(), max_loops=self.loops.value(),
+            iterative=True,
+            matrix_path=self.matrix_path, b_path=self.b_path,
+        )
+
+    @Slot()
+    def show_code(self):
+        if self.matrix is None:
+            return
+        CodeDialog(self._code_spec(), self).exec()
 
     @Slot()
     def export_csv(self):
