@@ -223,14 +223,27 @@ def _poll():
         arch = "windows-x64" if sys.platform == "win32" else "linux-x64"
         lib = root / "4.0" / "lib" / arch / "libfeast.a"
         if lib.exists():
-            blas = ["-lopenblas"] if sys.platform != "darwin" else ["-framework", "Accelerate"]
-            cr = subprocess.run(
-                ["gcc", "-O2", "-o", str(code_dir / "gen.exe"), str(code_dir / "gen.c"),
-                 "-I", str(root / "4.0" / "include"), str(lib),
-                 *blas, "-lgfortran", "-fopenmp", "-lm"],
+            # Same split as build/run-test.sh: compile the C with the C
+            # compiler, but link with the Fortran driver. Apple's clang rejects
+            # -fopenmp outright and does not know where libgfortran lives.
+            blas = (["-framework", "Accelerate"] if sys.platform == "darwin"
+                    else ["-lopenblas"])
+            fc = os.environ.get("FC", "gfortran")
+            obj, exe = code_dir / "gen.o", code_dir / "gen.bin"
+            cc = subprocess.run(
+                ["cc", "-O2", "-c", str(code_dir / "gen.c"), "-o", str(obj),
+                 "-I", str(root / "4.0" / "include")],
                 capture_output=True, text=True, timeout=300)
-            check("generated C compiles and links", cr.returncode == 0,
-                  cr.stderr.strip().splitlines()[-1][:70] if cr.returncode else "")
+            if cc.returncode:
+                check("generated C compiles and links", False,
+                      cc.stderr.strip().splitlines()[-1][:70])
+            else:
+                ln = subprocess.run(
+                    [fc, "-o", str(exe), str(obj), str(lib), *blas,
+                     "-fopenmp", "-lm"],
+                    capture_output=True, text=True, timeout=300)
+                check("generated C compiles and links", ln.returncode == 0,
+                      ln.stderr.strip().splitlines()[-1][:70] if ln.returncode else "")
         else:
             print(f"  SKIP  generated C compiles (no {lib})")
 

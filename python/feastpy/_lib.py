@@ -70,12 +70,16 @@ def load() -> ctypes.CDLL:
         # On Windows the DLL pulls in libopenblas/libgfortran from the mingw
         # bin directory; add whatever directory it lives in to the search path.
         if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
-            try:
-                os.add_dll_directory(str(p.parent))
-            except OSError:
-                pass
-            for extra in (r"C:\msys64\mingw64\bin",):
-                if Path(extra).exists():
+            # libfeast.dll pulls in libopenblas and libgfortran from the mingw
+            # bin directory. Since Python 3.8 that directory has to be declared
+            # explicitly -- PATH alone is not consulted for dependent DLLs.
+            extras = [str(p.parent)]
+            # FEAST_DLL_DIR covers installs that are not at the default path,
+            # e.g. GitHub's runners, which put MSYS2 under RUNNER_TEMP.
+            extras += [d for d in os.environ.get("FEAST_DLL_DIR", "").split(os.pathsep) if d]
+            extras.append(r"C:\msys64\mingw64\bin")
+            for extra in extras:
+                if extra and Path(extra).is_dir():
                     try:
                         os.add_dll_directory(extra)
                     except OSError:
