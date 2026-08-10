@@ -58,7 +58,9 @@ jobs:
       - name: Install toolchain (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install gcc
+          # OpenBLAS, not Accelerate: Accelerate's LAPACK makes FEAST's
+          # non-Hermitian routines return info=-3. See build/build-feast.sh.
+          brew install gcc openblas
           # Homebrew ships versioned binaries (gfortran-14) and no plain
           # `gfortran`; both scripts honour $FC.
           FC_BIN="$(ls "$(brew --prefix)"/bin/gfortran-* | sort -V | tail -1)"

@@ -123,7 +123,21 @@ echo "  LD  libfeast$SHEXT"
 BLAS_LIBS="${BLAS_LIBS:-}"
 if [ -z "$BLAS_LIBS" ]; then
   if [ "$OS" = macos ]; then
-    BLAS_LIBS="-framework Accelerate"
+    # Prefer OpenBLAS over Accelerate. Accelerate ships an old LAPACK, and
+    # FEAST's non-Hermitian path returns info=-3 ("internal error in the
+    # reduced eigenvalue solver") against it -- on both Apple Silicon and
+    # Intel, in a configuration-dependent way. The Hermitian path is fine,
+    # which is how this stayed hidden. OpenBLAS also makes the numerics the
+    # same on every platform we ship.
+    OB="$(brew --prefix openblas 2>/dev/null || true)"
+    if [ -n "$OB" ] && [ -d "$OB/lib" ]; then
+      BLAS_LIBS="-L$OB/lib -lopenblas"
+    else
+      echo "  !! OpenBLAS not found; falling back to Accelerate." >&2
+      echo "     Non-Hermitian problems will fail with info=-3. " >&2
+      echo "     Install it with: brew install openblas" >&2
+      BLAS_LIBS="-framework Accelerate"
+    fi
   else
     BLAS_LIBS="-lopenblas"
   fi

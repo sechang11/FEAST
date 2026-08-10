@@ -8,7 +8,19 @@ FC="${FC:-gfortran}"
 
 case "$(uname -s)" in
   Linux)  OS=linux;  BLAS="${BLAS_LIBS:--lopenblas}" ;;
-  Darwin) OS=macos;  BLAS="${BLAS_LIBS:--framework Accelerate}" ;;
+  Darwin)
+    OS=macos
+    # Match build-feast.sh: OpenBLAS where available, for the LAPACK reasons
+    # documented there.
+    if [ -z "${BLAS_LIBS:-}" ]; then
+      OB="$(brew --prefix openblas 2>/dev/null || true)"
+      if [ -n "$OB" ] && [ -d "$OB/lib" ]; then
+        BLAS_LIBS="-L$OB/lib -lopenblas"
+      else
+        BLAS_LIBS="-framework Accelerate"
+      fi
+    fi
+    BLAS="$BLAS_LIBS" ;;
   MINGW*|MSYS*)
     OS=windows; BLAS="${BLAS_LIBS:--lopenblas}"
     export TMPDIR="${TMPDIR:-C:/feasttmp}"; export TMP="$TMPDIR" TEMP="$TMPDIR"
