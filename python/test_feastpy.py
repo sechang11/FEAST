@@ -328,6 +328,15 @@ _err2 = (max(abs(v - (3 + 1j)) for v in _rg2.eigenvalues) if _rg2.n_found else f
 results.append(check("a different disc finds 3+1i", _rg2.n_found > 0 and _err2 < 1e-10,
                      f"found={_rg2.n_found} maxerr={_err2:.2e}"))
 
+# contour_points must actually reach the solver. A complex contour is a FULL
+# contour counted by fpm(8); setting only fpm(2) (the Hermitian half-contour)
+# made this argument a silent no-op, and the miss showed up as a
+# platform-dependent failure rather than an obvious one.
+_loops = {cp: feastpy.eig_disc(_G, center=1 + 2j, radius=0.5, m0=6,
+                               contour_points=cp).loops for cp in (4, 16)}
+results.append(check("contour_points changes the solve", _loops[4] != _loops[16],
+                     f"loops at 4 points={_loops[4]}, at 16={_loops[16]}"))
+
 _rg3 = feastpy.eig_disc(_G, center=50 + 0j, radius=1.0, m0=6)
 results.append(check("empty disc reports nothing found", _rg3.n_found == 0,
                      f"info={_rg3.info} found={_rg3.n_found}"))

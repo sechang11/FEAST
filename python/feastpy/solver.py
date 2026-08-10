@@ -199,7 +199,7 @@ def eig_disc(
     B=None,
     *,
     m0: Optional[int] = None,
-    contour_points: int = 8,
+    contour_points: int = 16,
     tol_exponent: int = 12,
     max_loops: int = 20,
     uplo: str = "F",
@@ -243,6 +243,11 @@ def eig_disc(
     m0 = int(min(m0, n))
 
     fpm = _make_fpm(contour_points, tol_exponent, max_loops, verbose)
+    # A complex contour is a FULL contour, and its point count is fpm(8) --
+    # fpm(2) is the half-contour count the Hermitian routines use and is
+    # ignored here. Setting only fpm(2) made contour_points a silent no-op,
+    # which showed up as a platform-dependent miss on a marginal problem.
+    fpm[7] = int(contour_points)
 
     if complex_symmetric:
         prefix, kind, ncols = "z", "sy", 1
