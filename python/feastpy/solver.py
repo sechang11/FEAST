@@ -216,13 +216,33 @@ def spectral_bounds(A, B=None) -> tuple[float, float]:
         return float(np.min(diag - radius)), float(np.max(diag + radius))
 
     lo, hi = _discs(A)
+
     if B is not None:
-        blo, bhi = _discs(B)
-        # A x = lambda B x  =>  |lambda| <= max|A| / min|B| for spd B.
-        blo = max(blo, 1e-300)
-        if blo > 0:
-            scale = 1.0 / blo
-            lo, hi = min(lo * scale, lo), max(hi * scale, hi)
+        # For spd B, lambda = (x'Ax/x'x) / (x'Bx/x'x), so the pencil's range is
+        # bounded by the extreme ratios of A's range to B's range.
+        #
+        # B's *Gershgorin* lower bound is useless here: it is routinely <= 0
+        # even for an spd B, and dividing by it produced ranges like 1e282.
+        # So get B's actual extremes iteratively -- it is a plain symmetric
+        # problem, no factorisation needed.
+        import scipy.sparse.linalg as spla
+        try:
+            blo = float(spla.eigsh(B, k=1, which="SA", return_eigenvectors=False,
+                                   tol=1e-4)[0])
+            bhi = float(spla.eigsh(B, k=1, which="LA", return_eigenvectors=False,
+                                   tol=1e-4)[0])
+        except Exception as exc:
+            raise RuntimeError(
+                "could not bound the spectrum of B: " + str(exc)) from exc
+
+        if blo <= 0:
+            raise RuntimeError(
+                f"B is not positive definite (smallest eigenvalue ~ {blo:.3g}); "
+                "the generalized problem is not defined for it")
+
+        ratios = [a / b for a in (lo, hi) for b in (blo, bhi)]
+        lo, hi = min(ratios), max(ratios)
+
     if lo == hi:                      # degenerate (e.g. a multiple of identity)
         pad = max(abs(lo) * 1e-6, 1e-12)
         lo, hi = lo - pad, hi + pad

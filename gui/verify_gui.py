@@ -23,6 +23,11 @@ state = {"phase": "start", "ticks": 0}
 failures = []
 
 
+def finish():
+    print(f"\n{'FAILURES: ' + ', '.join(failures) if failures else 'all checks passed'}")
+    app.exit(1 if failures else 0)
+
+
 def check(name, ok, detail=""):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}{'  ' + detail if detail else ''}")
     if not ok:
@@ -65,7 +70,7 @@ def poll():
             w.solve()
         return
 
-    if w.result is not None:
+    if state["phase"] == "solving" and w.result is not None:
         r = w.result
         print(f"solved: info={r.info} ({r.message})")
         print(f"found {r.n_found} eigenvalues, {r.loops} loop(s), epsout={r.epsout:.2e}")
@@ -76,9 +81,43 @@ def poll():
             print(f"first: {r.eigenvalues[0]:.12g}  last: {r.eigenvalues[-1]:.12g}")
         w.grab().save(str(OUT))
         print(f"screenshot: {OUT}")
-        print(f"\n{'FAILURES: ' + ', '.join(failures) if failures else 'all checks passed'}")
-        app.exit(1 if failures else 0)
-    elif state["ticks"] > 160:
+
+        # --- generalized problem: FEAST's own system1 sample ---------------
+        # The upstream driver finds 16 eigenvalues in [0.18, 1.0]; the GUI must
+        # agree, which also proves the B matrix reaches the solver.
+        print("\ngeneralized problem (FEAST sample system1):")
+        names = [w.demo_combo.itemText(i) for i in range(w.demo_combo.count())]
+        target = [n for n in names if "system1" in n]
+        if not target:
+            check("system1 demo present", False)
+            finish()
+            return
+        w.result = None
+        state["phase"] = "generalized"
+        state["ticks"] = 0
+        w.demo_combo.setCurrentText(target[0])
+        check("B matrix loaded with demo", w.b_matrix is not None,
+              w.b_label.text())
+        print(f"  A: {w.matrix_label.text()}")
+        w.m0.setValue(30)
+        w.solve()
+        return
+
+    if state["phase"] == "generalized" and w.result is not None:
+        r = w.result
+        print(f"solved: info={r.info} ({r.message}) found={r.n_found}")
+        check("generalized solve succeeded", r.info == 0)
+        check("matches upstream driver (16 eigenvalues)", r.n_found == 16,
+              f"found={r.n_found}")
+        if r.n_found:
+            print(f"  range {r.eigenvalues.min():.15f} .. {r.eigenvalues.max():.15f}")
+            print( "  upstream 0.216788800187194 .. 0.989790599324303")
+        w.grab().save(str(OUT.with_name(OUT.stem + "_generalized.png")))
+        print(f"screenshot: {OUT.with_name(OUT.stem + '_generalized.png')}")
+        finish()
+        return
+
+    if state["ticks"] > 160:
         print("TIMEOUT: solve never completed")
         w.grab().save(str(OUT))
         app.exit(1)

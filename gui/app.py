@@ -61,16 +61,18 @@ class CountWorker(QThread):
     finished_ok = Signal(int, float)
     failed = Signal(str)
 
-    def __init__(self, matrix, emin, emax, contour_points):
+    def __init__(self, matrix, emin, emax, contour_points, b_matrix=None):
         super().__init__()
         self.matrix, self.emin, self.emax = matrix, emin, emax
         self.contour_points = contour_points
+        self.b_matrix = b_matrix
 
     def run(self):
         import time
         try:
             t0 = time.perf_counter()
             n = feastpy.estimate_count(self.matrix, self.emin, self.emax,
+                                       self.b_matrix,
                                        contour_points=self.contour_points)
             self.finished_ok.emit(int(n), time.perf_counter() - t0)
         except Exception as exc:
@@ -84,6 +86,7 @@ class MainWindow(QMainWindow):
         self.resize(1180, 760)
 
         self.matrix = None
+        self.b_matrix = None
         self.result = None
         self.bounds = None
         self._syncing = False
@@ -119,6 +122,25 @@ class MainWindow(QMainWindow):
         # colour by opacity instead so it reads on both light and dark.
         self.matrix_label.setStyleSheet("color: palette(text); opacity: 0.7; font-size: 11px;")
         sf.addWidget(self.matrix_label)
+
+        # B matrix: A x = lambda B x. Optional -- absent means the standard
+        # problem. Many real problems (and FEAST's own samples) are generalized.
+        brow = QHBoxLayout()
+        self.open_b_btn = QPushButton("Open B matrix...")
+        self.open_b_btn.setToolTip("For the generalized problem A x = λ B x.\n"
+                                   "B must be positive definite.")
+        self.open_b_btn.clicked.connect(self.open_b_file)
+        brow.addWidget(self.open_b_btn)
+        self.clear_b_btn = QPushButton("Clear B")
+        self.clear_b_btn.clicked.connect(self.clear_b)
+        self.clear_b_btn.setEnabled(False)
+        brow.addWidget(self.clear_b_btn)
+        sf.addLayout(brow)
+
+        self.b_label = QLabel("no B - standard problem A x = λ x")
+        self.b_label.setWordWrap(True)
+        self.b_label.setStyleSheet("color: palette(text); font-size: 11px;")
+        sf.addWidget(self.b_label)
         lv.addWidget(src)
 
         interval = QGroupBox("Search interval")
@@ -313,15 +335,19 @@ class MainWindow(QMainWindow):
         if self.matrix is None:
             return
         try:
-            lo, hi = feastpy.spectral_bounds(self.matrix)
+            lo, hi = feastpy.spectral_bounds(self.matrix, self.b_matrix)
         except Exception as exc:
             self.range_label.setText(f"spectrum range: unavailable ({exc})")
             return
 
         self.bounds = (lo, hi)
-        self.range_label.setText(
-            f"all eigenvalues lie in [{lo:.6g}, {hi:.6g}]\n"
-            f"(Gershgorin bound - guaranteed, not tight)")
+        kind = "pencil bound" if self.b_matrix is not None else "Gershgorin bound"
+        # Two lines, not three: a third gets clipped by the group box.
+        self.range_label.setText(f"all eigenvalues lie in\n[{lo:.6g}, {hi:.6g}]")
+        self.range_label.setToolTip(
+            f"{kind}: guaranteed to contain every eigenvalue, but not tight.")
+        # The count belongs to the previous problem; leaving it up is a lie.
+        self.count_label.setText("drag the shaded band on the plot to choose an interval")
         pad = 0.02 * (hi - lo)
         self.plot.setXRange(lo - pad, hi + pad)
         self._spins_to_region()
@@ -349,7 +375,7 @@ class MainWindow(QMainWindow):
         self.count_btn.setEnabled(False)
         self.count_label.setText("estimating...")
         self.counter = CountWorker(self.matrix, self.emin.value(), self.emax.value(),
-                                   self.contour.value())
+                                   self.contour.value(), self.b_matrix)
         self.counter.finished_ok.connect(self.on_counted)
         self.counter.failed.connect(self.on_count_failed)
         self.counter.start()
@@ -379,12 +405,75 @@ class MainWindow(QMainWindow):
     def load_demo(self):
         name = self.demo_combo.currentText()
         build, emin, emax = matrixio.DEMOS[name]
-        self.matrix = build()
+        built = build()
+        self.b_matrix = None
+        self.clear_b_btn.setEnabled(False)
+        self.b_label.setText("no B - standard problem A x = λ x")
+        if isinstance(built, tuple):
+            self.matrix, b = built
+        else:
+            self.matrix, b = built, None
         self.emin.setValue(emin)
         self.emax.setValue(emax)
         self.matrix_label.setText(matrixio.describe(self.matrix))
+        if b is not None:
+            self._set_b(b, "paired with demo")
         self._update_spectrum_view()
         self._log(f"loaded demo: {name}")
+
+    def _set_b(self, B, origin: str):
+        """Adopt B after checking it can actually serve as the mass matrix."""
+        if B.shape != self.matrix.shape:
+            QMessageBox.warning(self, APP_NAME,
+                                f"B is {B.shape[0]}x{B.shape[1]} but A is "
+                                f"{self.matrix.shape[0]}x{self.matrix.shape[1]}. "
+                                "They must match.")
+            return False
+
+        sym, herm = matrixio.check_symmetry(B)
+        if not (sym or herm):
+            QMessageBox.warning(self, APP_NAME,
+                                "B is neither symmetric nor Hermitian, so the "
+                                "generalized problem is not defined.")
+            return False
+
+        if not matrixio.is_probably_spd(B):
+            # FEAST requires spd B; carrying on would give silent nonsense.
+            QMessageBox.warning(
+                self, APP_NAME,
+                "B does not look positive definite.\n\n"
+                "FEAST's generalized interfaces require an spd B. Results would "
+                "not be meaningful, so this matrix was not loaded.")
+            return False
+
+        self.b_matrix = B
+        self.b_label.setText(f"B: {matrixio.describe(B)}  ({origin})")
+        self.clear_b_btn.setEnabled(True)
+        self._update_spectrum_view()
+        self._log(f"loaded B ({origin}): {matrixio.describe(B)}")
+        return True
+
+    @Slot()
+    def clear_b(self):
+        self.b_matrix = None
+        self.b_label.setText("no B - standard problem A x = λ x")
+        self.clear_b_btn.setEnabled(False)
+        self._update_spectrum_view()
+        self._log("cleared B; solving the standard problem")
+
+    @Slot()
+    def open_b_file(self):
+        if self.matrix is None:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Open B matrix", "",
+                                              matrixio.SUPPORTED)
+        if not path:
+            return
+        try:
+            B = matrixio.load_matrix(path)
+        except matrixio.MatrixLoadError as exc:
+            QMessageBox.warning(self, APP_NAME, str(exc)); return
+        self._set_b(B, Path(path).name)
 
     @Slot()
     def open_file(self):
@@ -412,9 +501,26 @@ class MainWindow(QMainWindow):
             return
 
         self.matrix = M
+        self.b_matrix = None
+        self.clear_b_btn.setEnabled(False)
+        self.b_label.setText("no B - standard problem A x = λ x")
         self.matrix_label.setText(matrixio.describe(M))
         self._update_spectrum_view()
         self._log(f"loaded {Path(path).name}: {matrixio.describe(M)}")
+
+        # FEAST names generalized pairs system1.mtx / system1B.mtx, so offer
+        # the partner rather than making the user go find it.
+        partner = matrixio.guess_b_path(path)
+        if partner is not None:
+            ans = QMessageBox.question(
+                self, APP_NAME,
+                f"Found {partner.name} beside this matrix.\n\n"
+                "Load it as B and solve the generalized problem A x = λ B x?")
+            if ans == QMessageBox.Yes:
+                try:
+                    self._set_b(matrixio.load_matrix(partner), partner.name)
+                except matrixio.MatrixLoadError as exc:
+                    QMessageBox.warning(self, APP_NAME, str(exc))
 
     @Slot()
     def solve(self):
@@ -438,6 +544,7 @@ class MainWindow(QMainWindow):
         self.progress.show()
         self.statusBar().showMessage("solving...")
 
+        params["B"] = self.b_matrix
         self.worker = SolveWorker(self.matrix, params)
         self.worker.finished_ok.connect(self.on_solved)
         self.worker.failed.connect(self.on_failed)

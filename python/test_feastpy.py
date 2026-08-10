@@ -2,7 +2,10 @@
 import numpy as np
 import scipy.sparse as sp
 
+import tempfile, os
+
 import feastpy
+from feastpy import matrixio
 
 N = 100
 EXACT = np.array([2 - 2 * np.cos((k + 1) * np.pi / (N + 1)) for k in range(N)])
@@ -82,9 +85,6 @@ except ValueError:
 # --- banner-less Matrix Market ------------------------------------------------
 # FEAST's own files in 4.0/utility/data are a mix of real Matrix Market and
 # bare coordinate format; the loader must read both.
-import tempfile, os
-from feastpy import matrixio
-
 with tempfile.TemporaryDirectory() as td:
     p = os.path.join(td, "bare.mtx")
     with open(p, "w") as fh:
@@ -99,6 +99,50 @@ with tempfile.TemporaryDirectory() as td:
     M2 = matrixio.load_matrix(p2)
     results.append(check("Fortran D-exponent parsed", abs(M2[0, 0] - 7.1e-19) < 1e-30,
                          f"got {M2[0, 0]!r}"))
+
+# --- spectral bounds ----------------------------------------------------------
+lo, hi = feastpy.spectral_bounds(laplacian())
+results.append(check("Gershgorin brackets the spectrum",
+                     lo <= EXACT.min() and hi >= EXACT.max(),
+                     f"[{lo:.4g}, {hi:.4g}] vs true [{EXACT.min():.4g}, {EXACT.max():.4g}]"))
+
+# Generalized: B's Gershgorin lower bound is routinely <= 0 even for spd B, and
+# an earlier version divided by it and returned ranges around 1e282.
+Bg = sp.diags([np.full(N - 1, 0.5), np.full(N, 4.0), np.full(N - 1, 0.5)],
+              [-1, 0, 1], format="csr")
+glo, ghi = feastpy.spectral_bounds(As, Bg)
+true_gen = np.linalg.eigvalsh(np.linalg.solve(Bg.toarray(), As.toarray()))
+results.append(check("generalized bounds are sane",
+                     glo <= true_gen.min() and ghi >= true_gen.max() and abs(ghi) < 1e4,
+                     f"[{glo:.4g}, {ghi:.4g}] vs true [{true_gen.min():.4g}, {true_gen.max():.4g}]"))
+
+try:
+    feastpy.spectral_bounds(As, sp.diags([np.full(N, -1.0)], [0], format="csr"))
+    results.append(check("non-spd B rejected", False, "no error raised"))
+except RuntimeError:
+    results.append(check("non-spd B rejected", True))
+
+# --- count estimate -----------------------------------------------------------
+est = feastpy.estimate_count(As, 0.0, 0.05)
+results.append(check("count estimate is close", abs(est - len(want)) <= 3,
+                     f"estimate={est} true={len(want)}"))
+
+# --- B-matrix discovery -------------------------------------------------------
+with tempfile.TemporaryDirectory() as td:
+    for nm in ("sys.mtx", "sysB.mtx"):
+        with open(os.path.join(td, nm), "w") as fh:
+            fh.write("2 2 2\n1 1 1.0\n2 2 1.0\n")
+    found = matrixio.guess_b_path(os.path.join(td, "sys.mtx"))
+    results.append(check("finds the paired B matrix",
+                         found is not None and found.name == "sysB.mtx", str(found)))
+    none_found = matrixio.guess_b_path(os.path.join(td, "sysB.mtx"))
+    results.append(check("no false B match", none_found is None, str(none_found)))
+
+results.append(check("spd check accepts identity",
+                     matrixio.is_probably_spd(sp.identity(50, format="csr"))))
+results.append(check("spd check rejects negative diagonal",
+                     not matrixio.is_probably_spd(sp.diags([np.full(50, -1.0)], [0],
+                                                           format="csr"))))
 
 # --- error handling ----------------------------------------------------------
 empty = feastpy.eigh_interval(laplacian(), 100.0, 200.0, m0=5)

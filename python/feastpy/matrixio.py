@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import scipy.io
@@ -137,9 +138,61 @@ def random_symmetric(n: int = 300, seed: int = 0):
     return (A + A.T) / 2
 
 
+def guess_b_path(path: str | Path) -> Optional[Path]:
+    """Find the B matrix that goes with an A matrix, by FEAST's own convention.
+
+    Upstream names generalized pairs `system1.mtx` / `system1B.mtx`, so opening
+    one can offer the other instead of making the user hunt for it.
+    """
+    path = Path(path)
+    stem = path.name
+    for suffix in (".mtx", ".npy", ".npz", ".csv", ".txt"):
+        if stem.endswith(suffix):
+            base = stem[: -len(suffix)]
+            for cand in (f"{base}B{suffix}", f"{base}_B{suffix}", f"{base}b{suffix}"):
+                p = path.with_name(cand)
+                if p.exists():
+                    return p
+    return None
+
+
+def is_probably_spd(B, samples: int = 12) -> bool:
+    """Cheap necessary-condition check that B is positive definite.
+
+    FEAST's generalized interfaces require an spd B; a full Cholesky on a large
+    sparse matrix is too slow for a UI hint, so this checks the diagonal (all
+    entries of an spd matrix's diagonal are positive) plus a few random
+    Rayleigh quotients. It can pass a non-spd matrix, but a failure is real.
+    """
+    diag = B.diagonal() if sp.issparse(B) else np.diag(B)
+    if np.any(np.real(diag) <= 0):
+        return False
+    n = B.shape[0]
+    rng = np.random.default_rng(0)
+    for _ in range(samples):
+        x = rng.standard_normal(n)
+        if float(x @ (B @ x)) <= 0:
+            return False
+    return True
+
+
+def _feast_sample(name: str):
+    """Load one of the matrix pairs FEAST ships in 4.0/utility/data."""
+    data = Path(__file__).resolve().parent.parent.parent / "4.0" / "utility" / "data"
+    A = load_matrix(data / f"{name}.mtx")
+    bpath = data / f"{name}B.mtx"
+    return (A, load_matrix(bpath)) if bpath.exists() else A
+
+
+# Each entry is (builder, emin, emax). The builder returns either A, or an
+# (A, B) pair for a generalized problem.
 DEMOS = {
     "1-D Laplacian (n=200, sparse)": (lambda: laplacian_1d(200), 0.0, 0.02),
     "2-D Laplacian (30x30 grid, sparse)": (lambda: laplacian_2d(30), 0.0, 0.5),
     "1-D Laplacian (n=300, dense)": (lambda: laplacian_1d(300, sparse=False), 0.0, 0.01),
     "Random symmetric (n=300, dense)": (lambda: random_symmetric(300), -1.0, 1.0),
+    # FEAST's own sample: generalized, and the problem RUNNING-THE-ORIGINAL.md
+    # walks through with the upstream driver.
+    "FEAST sample: system1 (generalized)": (lambda: _feast_sample("system1"), 0.18, 1.0),
+    "FEAST sample: system3 (generalized)": (lambda: _feast_sample("system3"), 0.18, 1.0),
 }
