@@ -20,7 +20,8 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog,
     QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow,
     QMessageBox, QProgressBar, QPushButton, QSpinBox, QSplitter, QTableWidget,
-    QTableWidgetItem, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+    QScrollArea, QStackedWidget, QTableWidgetItem, QTabWidget, QTextEdit,
+    QVBoxLayout, QWidget,
 )
 
 import feastpy
@@ -187,6 +188,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.resize(1180, 760)
+        # Fit on a 1366x768 laptop, the common worst case.
+        self.setMinimumSize(880, 560)
 
         self.matrix = None
         self.b_matrix = None
@@ -326,31 +329,51 @@ class MainWindow(QMainWindow):
         pf.addRow(self.auto_m0)
         lv.addWidget(params)
 
+        # Actions live outside the scroll area: Solve is the primary action and
+        # must never scroll out of view, which is what happened on a short
+        # window before this.
+        actions = QWidget()
+        actions_lv = QVBoxLayout(actions)
+        actions_lv.setContentsMargins(0, 6, 0, 0)
+
         self.solve_btn = QPushButton("Solve")
         self.solve_btn.setMinimumHeight(38)
         f = QFont(); f.setBold(True); self.solve_btn.setFont(f)
         self.solve_btn.clicked.connect(self.on_solve_button)
-        lv.addWidget(self.solve_btn)
+        actions_lv.addWidget(self.solve_btn)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.hide()
-        lv.addWidget(self.progress)
+        actions_lv.addWidget(self.progress)
 
         self.code_btn = QPushButton("Copy as code...")
         self.code_btn.setToolTip("Emit this exact problem as a runnable Python "
                                  "or C program.")
         self.code_btn.clicked.connect(self.show_code)
-        lv.addWidget(self.code_btn)
+        actions_lv.addWidget(self.code_btn)
 
         self.export_btn = QPushButton("Export results...")
         self.export_btn.clicked.connect(self.export_csv)
         self.export_btn.setEnabled(False)
-        lv.addWidget(self.export_btn)
+        actions_lv.addWidget(self.export_btn)
 
         lv.addStretch(1)
-        left.setMaximumWidth(330)
-        splitter.addWidget(left)
+
+        left_scroll = QScrollArea()
+        left_scroll.setWidget(left)
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QScrollArea.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        left_column = QWidget()
+        col = QVBoxLayout(left_column)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.addWidget(left_scroll, stretch=1)
+        col.addWidget(actions)              # pinned, always reachable
+        left_column.setMinimumWidth(300)
+        left_column.setMaximumWidth(348)    # room for the scrollbar
+        splitter.addWidget(left_column)
 
         # ---- right: results
         right = QWidget()
@@ -373,6 +396,8 @@ class MainWindow(QMainWindow):
         self.region.sigRegionChanged.connect(self._region_to_spins)
         self.plot.addItem(self.region)
 
+        self.plot.setTitle("press Solve to find eigenvalues in the shaded band")
+
         self.conv_plot = pg.PlotWidget()
         self.conv_plot.setBackground(None)
         self.conv_plot.setLabel("bottom", "refinement loop")
@@ -386,12 +411,23 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.conv_plot, "Convergence")
         rv.addWidget(self.tabs, stretch=3)
 
+        self.empty_label = QLabel()
+        self.empty_label.setAlignment(Qt.AlignCenter)
+        self.empty_label.setWordWrap(True)
+        self.empty_label.setStyleSheet("color: palette(text); font-size: 13px;")
+
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["#", "eigenvalue", "residual"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         # We render our own "#" column, so Qt's row numbers would be a duplicate.
         self.table.verticalHeader().setVisible(False)
-        rv.addWidget(self.table, stretch=4)
+        self.results_stack = QStackedWidget()
+        self.results_stack.addWidget(self.empty_label)   # 0
+        self.results_stack.addWidget(self.table)         # 1
+        rv.addWidget(self.results_stack, stretch=4)
+        self._show_placeholder("Choose a search interval, then press Solve.\n\n"
+                               "The shaded band on the plot is the interval; "
+                               "drag it to move it.")
 
         self.log = QTextEdit()
         self.log.setReadOnly(True)
@@ -419,6 +455,13 @@ class MainWindow(QMainWindow):
         a.triggered.connect(self.about); h.addAction(a)
 
     # ------------------------------------------------------------ actions ----
+    def _show_placeholder(self, text: str):
+        self.empty_label.setText(text)
+        self.results_stack.setCurrentIndex(0)
+
+    def _show_results_table(self):
+        self.results_stack.setCurrentIndex(1)
+
     def _log(self, msg: str):
         self.log.append(msg)
 
@@ -780,6 +823,13 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"{r.n_found} eigenvalues  |  {secs:.2f}s  |  {r.message}")
 
+        if r.n_found:
+            self._show_results_table()
+        else:
+            self._show_placeholder(
+                f"No eigenvalues in [{self.emin.value():g}, {self.emax.value():g}].\n\n"
+                'Try "Use whole spectrum", or "How many are in here?" to find '
+                "where they are.")
         self.table.setRowCount(r.n_found)
         for i in range(r.n_found):
             for col, text in ((0, str(i + 1)),
@@ -802,6 +852,15 @@ class MainWindow(QMainWindow):
             lo, hi = self.emin.value(), self.emax.value()
             pad = 0.08 * (hi - lo) or 1e-9
             self.plot.setXRange(lo - pad, hi + pad)
+            self.zoom_out_btn.setEnabled(self.bounds is not None)
+            self.plot.setTitle(None)
+        else:
+            # Nothing found: show WHERE we looked, otherwise the axis still
+            # frames the previous run and the interval is off-screen entirely.
+            lo, hi = self.emin.value(), self.emax.value()
+            pad = 0.5 * (hi - lo) or 1e-9
+            self.plot.setXRange(lo - pad, hi + pad)
+            self.plot.setTitle("no eigenvalues in this interval")
             self.zoom_out_btn.setEnabled(self.bounds is not None)
         self.export_btn.setEnabled(r.n_found > 0)
 
