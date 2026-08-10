@@ -78,14 +78,20 @@ class FeastResult:
 
 
 def _make_fpm(contour_points: int, tol_exponent: int, max_loops: int,
-              verbose: bool) -> np.ndarray:
-    """fpm is FEAST's 64-entry parameter array; feastinit fills in the defaults."""
+              verbose: bool, count_only: bool = False) -> np.ndarray:
+    """fpm is FEAST's 64-entry parameter array; feastinit fills in the defaults.
+
+    Note the index shift: the documentation uses Fortran's fpm(1..64), so
+    fpm(N) is fpm[N-1] here.
+    """
     fpm = np.zeros(64, dtype=np.int32)
     _lib.sym("feastinit")(fpm.ctypes.data_as(ctypes.POINTER(_i)))
-    fpm[0] = 1 if verbose else 0     # runtime printing
-    fpm[1] = contour_points          # quadrature points on the contour
-    fpm[2] = tol_exponent            # stop at 1e-<tol_exponent>
-    fpm[3] = max_loops               # max refinement loops
+    fpm[0] = 1 if verbose else 0     # fpm(1)  runtime printing
+    fpm[1] = contour_points          # fpm(2)  quadrature points on the contour
+    fpm[2] = tol_exponent            # fpm(3)  stop at 1e-<tol_exponent>
+    fpm[3] = max_loops               # fpm(4)  max refinement loops
+    if count_only:
+        fpm[13] = 2                  # fpm(14) stochastic eigenvalue-count estimate
     return fpm
 
 
@@ -101,6 +107,7 @@ def eigh_interval(
     max_loops: int = 20,
     uplo: str = "F",
     verbose: bool = False,
+    count_only: bool = False,
 ) -> FeastResult:
     """All eigenvalues of a dense Hermitian problem inside [emin, emax].
 
@@ -132,7 +139,7 @@ def eigh_interval(
         m0 = min(n, max(10, n // 4))
     m0 = int(min(m0, n))
 
-    fpm = _make_fpm(contour_points, tol_exponent, max_loops, verbose)
+    fpm = _make_fpm(contour_points, tol_exponent, max_loops, verbose, count_only)
 
     lam = np.zeros(m0, dtype=np.float64)             # eigenvalues are always real
     q = np.zeros((n, m0), dtype=dtype, order="F")
@@ -181,6 +188,65 @@ def eigh_interval(
     )
 
 
+def spectral_bounds(A, B=None) -> tuple[float, float]:
+    """Bracket the whole spectrum of a Hermitian A using Gershgorin discs.
+
+    Every eigenvalue is guaranteed to lie in [lo, hi]. It costs one pass over
+    the nonzeros -- no factorisation, no iteration -- which is what makes it
+    usable for "show me the range" the instant a matrix is loaded.
+
+    The bound is loose (often several times wider than the true spectrum), so
+    treat it as the axis limits to explore within, not as an answer.
+
+    For a generalized problem the discs bound A alone; the pencil's spectrum is
+    scaled by B, so the range is widened by B's own Gershgorin extremes.
+    """
+    import scipy.sparse as sp
+
+    def _discs(M):
+        if sp.issparse(M):
+            M = sp.csr_matrix(M)
+            diag = np.real(M.diagonal())
+            absM = abs(M)
+            radius = np.asarray(absM.sum(axis=1)).ravel() - abs(diag)
+        else:
+            M = np.asarray(M)
+            diag = np.real(np.diag(M))
+            radius = np.abs(M).sum(axis=1) - np.abs(diag)
+        return float(np.min(diag - radius)), float(np.max(diag + radius))
+
+    lo, hi = _discs(A)
+    if B is not None:
+        blo, bhi = _discs(B)
+        # A x = lambda B x  =>  |lambda| <= max|A| / min|B| for spd B.
+        blo = max(blo, 1e-300)
+        if blo > 0:
+            scale = 1.0 / blo
+            lo, hi = min(lo * scale, lo), max(hi * scale, hi)
+    if lo == hi:                      # degenerate (e.g. a multiple of identity)
+        pad = max(abs(lo) * 1e-6, 1e-12)
+        lo, hi = lo - pad, hi + pad
+    return lo, hi
+
+
+def estimate_count(A, emin: float, emax: float, B=None, *,
+                   contour_points: int = 8, m0: Optional[int] = None) -> int:
+    """Estimate how many eigenvalues lie in [emin, emax] without solving.
+
+    Uses FEAST's built-in stochastic estimator (fpm(14)=2), which runs a single
+    contour pass over random vectors. Far cheaper than a full solve, and it is
+    what turns "guess M0 and retry" into a decision the app can make itself.
+
+    The result is stochastic: expect it to be close, not exact. Size M0 above
+    it, not equal to it.
+    """
+    import scipy.sparse as sp
+    fn = eigsh_interval if sp.issparse(A) else eigh_interval
+    r = fn(A, emin, emax, B, m0=m0, contour_points=contour_points,
+           count_only=True)
+    return max(0, r.n_found)
+
+
 def _as_uplo(M, uplo: str):
     """Store M the way FEAST's UPLO argument says it is stored."""
     import scipy.sparse as sp
@@ -203,6 +269,7 @@ def eigsh_interval(
     max_loops: int = 20,
     uplo: str = "U",
     verbose: bool = False,
+    count_only: bool = False,
 ) -> FeastResult:
     """Sparse (CSR) real-symmetric version of :func:`eigh_interval`.
 
@@ -242,7 +309,7 @@ def eigsh_interval(
         m0 = min(n, max(10, n // 4))
     m0 = int(min(m0, n))
 
-    fpm = _make_fpm(contour_points, tol_exponent, max_loops, verbose)
+    fpm = _make_fpm(contour_points, tol_exponent, max_loops, verbose, count_only)
 
     lam = np.zeros(m0, dtype=np.float64)
     q = np.zeros((n, m0), dtype=np.float64, order="F")

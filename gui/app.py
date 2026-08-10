@@ -53,6 +53,30 @@ class SolveWorker(QThread):
             self.failed.emit(f"{type(exc).__name__}: {exc}")
 
 
+class CountWorker(QThread):
+    """Stochastic eigenvalue-count estimate -- typically 100x+ faster than a
+    full solve, which is what makes 'how many are in here?' answerable
+    interactively while the user drags the interval around."""
+
+    finished_ok = Signal(int, float)
+    failed = Signal(str)
+
+    def __init__(self, matrix, emin, emax, contour_points):
+        super().__init__()
+        self.matrix, self.emin, self.emax = matrix, emin, emax
+        self.contour_points = contour_points
+
+    def run(self):
+        import time
+        try:
+            t0 = time.perf_counter()
+            n = feastpy.estimate_count(self.matrix, self.emin, self.emax,
+                                       contour_points=self.contour_points)
+            self.finished_ok.emit(int(n), time.perf_counter() - t0)
+        except Exception as exc:
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -61,7 +85,10 @@ class MainWindow(QMainWindow):
 
         self.matrix = None
         self.result = None
+        self.bounds = None
+        self._syncing = False
         self.worker: SolveWorker | None = None
+        self.counter: CountWorker | None = None
 
         self._build_ui()
         self._build_menu()
@@ -104,10 +131,37 @@ class MainWindow(QMainWindow):
             box.setValue(val)
         itf.addRow("E min", self.emin)
         itf.addRow("E max", self.emax)
-        hint = QLabel("FEAST returns every eigenvalue in this interval.")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: palette(text); font-size: 11px;")
-        itf.addRow(hint)
+        self.emin.valueChanged.connect(self._spins_to_region)
+        self.emax.valueChanged.connect(self._spins_to_region)
+
+        self.range_label = QLabel("spectrum range: unknown")
+        self.range_label.setWordWrap(True)
+        self.range_label.setStyleSheet("color: palette(text); font-size: 11px;")
+        itf.addRow(self.range_label)
+
+        self.full_range_btn = QPushButton("Use whole spectrum")
+        self.full_range_btn.setToolTip("Set the interval to the Gershgorin bounds, "
+                                       "which are guaranteed to contain every eigenvalue.")
+        self.full_range_btn.clicked.connect(self.use_full_range)
+        itf.addRow(self.full_range_btn)
+
+        self.count_btn = QPushButton("How many are in here?")
+        self.count_btn.setToolTip("Stochastic estimate of the eigenvalue count.\n"
+                                  "Much faster than solving, and sets M0 for you.")
+        self.count_btn.clicked.connect(self.estimate_count)
+        itf.addRow(self.count_btn)
+
+        self.count_label = QLabel("drag the shaded band on the plot to choose an interval")
+        self.count_label.setWordWrap(True)
+        self.count_label.setStyleSheet("color: palette(text); font-size: 11px;")
+        itf.addRow(self.count_label)
+
+        self.zoom_out_btn = QPushButton("Zoom out to full spectrum")
+        self.zoom_out_btn.setToolTip("Solving zooms the plot to the interval; "
+                                     "this returns to the whole spectral range.")
+        self.zoom_out_btn.clicked.connect(self.zoom_full)
+        self.zoom_out_btn.setEnabled(False)
+        itf.addRow(self.zoom_out_btn)
         lv.addWidget(interval)
 
         params = QGroupBox("Parameters")
@@ -171,6 +225,17 @@ class MainWindow(QMainWindow):
         self.plot.setLabel("bottom", "eigenvalue")
         self.plot.setLabel("left", "index")
         self.plot.showGrid(x=True, y=True, alpha=0.25)
+
+        # The draggable search interval. This is the core interaction: FEAST
+        # asks for a range, and typing two numbers blind is the single biggest
+        # source of empty results. Dragging a band over the known spectral
+        # bounds turns that guess into a choice.
+        self.region = pg.LinearRegionItem(values=(0.0, 0.02),
+                                          brush=pg.mkBrush(70, 130, 220, 45),
+                                          hoverBrush=pg.mkBrush(70, 130, 220, 70))
+        self.region.setZValue(-10)
+        self.region.sigRegionChanged.connect(self._region_to_spins)
+        self.plot.addItem(self.region)
         rv.addWidget(self.plot, stretch=3)
 
         self.table = QTableWidget(0, 3)
@@ -220,6 +285,96 @@ class MainWindow(QMainWindow):
                                  f"{exc}")
             self.solve_btn.setEnabled(False)
 
+    # -- interval <-> plot band -------------------------------------------
+    # Both directions write to the other, so a guard breaks the feedback loop.
+    def _region_to_spins(self):
+        if self._syncing:
+            return
+        self._syncing = True
+        try:
+            lo, hi = self.region.getRegion()
+            self.emin.setValue(lo)
+            self.emax.setValue(hi)
+            self.count_label.setText("interval changed - estimate again")
+        finally:
+            self._syncing = False
+
+    def _spins_to_region(self):
+        if self._syncing:
+            return
+        self._syncing = True
+        try:
+            self.region.setRegion((self.emin.value(), self.emax.value()))
+        finally:
+            self._syncing = False
+
+    def _update_spectrum_view(self):
+        """Gershgorin-bound the spectrum so the user can see where to look."""
+        if self.matrix is None:
+            return
+        try:
+            lo, hi = feastpy.spectral_bounds(self.matrix)
+        except Exception as exc:
+            self.range_label.setText(f"spectrum range: unavailable ({exc})")
+            return
+
+        self.bounds = (lo, hi)
+        self.range_label.setText(
+            f"all eigenvalues lie in [{lo:.6g}, {hi:.6g}]\n"
+            f"(Gershgorin bound - guaranteed, not tight)")
+        pad = 0.02 * (hi - lo)
+        self.plot.setXRange(lo - pad, hi + pad)
+        self._spins_to_region()
+
+    @Slot()
+    def zoom_full(self):
+        if self.bounds is None:
+            return
+        lo, hi = self.bounds
+        pad = 0.02 * (hi - lo) or 1e-9
+        self.plot.setXRange(lo - pad, hi + pad)
+
+    @Slot()
+    def use_full_range(self):
+        if self.bounds is None:
+            return
+        lo, hi = self.bounds
+        self.emin.setValue(lo)
+        self.emax.setValue(hi)
+
+    @Slot()
+    def estimate_count(self):
+        if self.matrix is None or self.emin.value() >= self.emax.value():
+            return
+        self.count_btn.setEnabled(False)
+        self.count_label.setText("estimating...")
+        self.counter = CountWorker(self.matrix, self.emin.value(), self.emax.value(),
+                                   self.contour.value())
+        self.counter.finished_ok.connect(self.on_counted)
+        self.counter.failed.connect(self.on_count_failed)
+        self.counter.start()
+
+    @Slot(int, float)
+    def on_counted(self, n: int, secs: float):
+        self.count_btn.setEnabled(True)
+        self.count_label.setText(f"about {n} eigenvalue(s) in this interval  ({secs:.2f}s)")
+        self._log(f"estimated {n} eigenvalues in "
+                  f"[{self.emin.value():g}, {self.emax.value():g}] in {secs:.2f}s")
+        if n > 0:
+            # The estimate is stochastic, so size the subspace above it rather
+            # than at it; too small costs a whole extra refinement cycle.
+            suggested = min(self.matrix.shape[0], max(10, int(n * 1.5) + 5))
+            self.m0.setValue(suggested)
+            self._log(f"  set M0 = {suggested}")
+        else:
+            self.count_label.setText("about 0 eigenvalues here - try a wider interval")
+
+    @Slot(str)
+    def on_count_failed(self, msg: str):
+        self.count_btn.setEnabled(True)
+        self.count_label.setText("estimate failed")
+        self._log(f"  ERROR {msg}")
+
     @Slot()
     def load_demo(self):
         name = self.demo_combo.currentText()
@@ -228,6 +383,7 @@ class MainWindow(QMainWindow):
         self.emin.setValue(emin)
         self.emax.setValue(emax)
         self.matrix_label.setText(matrixio.describe(self.matrix))
+        self._update_spectrum_view()
         self._log(f"loaded demo: {name}")
 
     @Slot()
@@ -257,6 +413,7 @@ class MainWindow(QMainWindow):
 
         self.matrix = M
         self.matrix_label.setText(matrixio.describe(M))
+        self._update_spectrum_view()
         self._log(f"loaded {Path(path).name}: {matrixio.describe(M)}")
 
     @Slot()
@@ -319,13 +476,18 @@ class MainWindow(QMainWindow):
                 self.table.setItem(i, col, item)
 
         self.plot.clear()
+        self.plot.addItem(self.region)      # clear() drops it otherwise
         if r.n_found:
             self.plot.plot(r.eigenvalues, np.arange(1, r.n_found + 1),
                            pen=None, symbol="o", symbolSize=7,
                            symbolBrush=(70, 130, 220))
-        for x in (self.emin.value(), self.emax.value()):
-            self.plot.addLine(x=x, pen=pg.mkPen((200, 80, 80), style=Qt.DashLine))
-
+            # Zoom to the interval that was solved. The axis was showing the
+            # whole Gershgorin range for exploring, and a narrow interval's
+            # results are an unreadable sliver at that scale.
+            lo, hi = self.emin.value(), self.emax.value()
+            pad = 0.08 * (hi - lo) or 1e-9
+            self.plot.setXRange(lo - pad, hi + pad)
+            self.zoom_out_btn.setEnabled(self.bounds is not None)
         self.export_btn.setEnabled(r.n_found > 0)
 
         if r.info not in (0, 1):

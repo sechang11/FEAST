@@ -5,12 +5,16 @@ from .solver import (
     FeastResult,
     eigh_interval,
     eigsh_interval,
+    estimate_count,
     explain_info,
+    spectral_bounds,
 )
 
 __all__ = [
     "eigh_interval",
     "eigsh_interval",
+    "estimate_count",
+    "spectral_bounds",
     "FeastResult",
     "FeastError",
     "FeastLibraryNotFound",

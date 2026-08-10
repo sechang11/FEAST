@@ -12,7 +12,13 @@ build/test_feast.exe
 *.exe
 
 # Python
+# Virtualenvs under any of the usual names -- `.venv/` alone missed `gui/venv/`,
+# which is how a 709 MB PySide6 tree got committed once.
 .venv/
+venv/
+env/
+**/venv/
+**/.venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
