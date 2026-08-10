@@ -46,8 +46,29 @@ The API needs the native library, so the box needs `libfeast` built for its
 platform (`bash build/build-feast.sh`) and OpenBLAS present. Everything else is
 static files.
 
-Worth adding before this faces the internet:
+### Hardening (done)
 
-- a rate limit per IP — a solve is real CPU work,
-- a request-size limit at the proxy as well as in the app,
-- more than one worker, since a solve occupies a request thread.
+| Control | Default | Override |
+|---|---|---|
+| Requests per IP per minute | 20 | `FEAST_RATE_LIMIT` |
+| Simultaneous solves | 4 | `FEAST_MAX_CONCURRENT` |
+| Trust `X-Forwarded-For` | off | `FEAST_TRUST_PROXY=1` |
+
+`X-Forwarded-For` is ignored unless you opt in, so the rate limit cannot be
+bypassed by spoofing the header on a direct connection. Turn it on only when
+something in front of you actually sets it.
+
+Also in place: `Content-Security-Policy` (nothing loads off-origin),
+`X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`; body-size
+rejection before the body is read; malformed input returns 400 rather than 500;
+and each upload is parsed in its own temp directory — a fixed filename would let
+concurrent requests clobber each other and read each other's matrices.
+
+### Still to do before it faces the internet
+
+- Run behind a reverse proxy that terminates TLS and enforces its own body cap.
+- `--workers N` (each worker gets its own rate-limit table, so set
+  `FEAST_RATE_LIMIT` to your intended limit divided by the worker count, or move
+  the limiter to the proxy).
+- The rate-limit table is in-process; a multi-machine deployment needs a shared
+  store.

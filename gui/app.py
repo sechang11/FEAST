@@ -1015,6 +1015,71 @@ class MainWindow(QMainWindow):
             "distributed under the BSD license.")
 
 
+def selftest() -> int:
+    """Solve a problem with a known answer and report. No window.
+
+    This is how a packaged binary gets checked: it exercises the bundled
+    libfeast, the child-process runner and the sample data, without needing a
+    display or a person to click anything.
+    """
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+    # A windowed build on Windows has no console attached, so print() goes
+    # nowhere when it is launched from a terminal. Mirror everything to a file
+    # so a packaged binary can still be checked.
+    report_path = os.environ.get("FEAST_SELFTEST_OUT", "feast-selftest.txt")
+    lines = []
+
+    def say(msg):
+        print(msg)
+        lines.append(str(msg))
+
+    def flush():
+        try:
+            Path(report_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except OSError:
+            pass
+
+    app = QApplication(sys.argv)
+    w = MainWindow()
+
+    say(f"platform: {sys.platform} frozen={getattr(sys, 'frozen', False)}")
+    say(f"library : {feastpy.load()._name}")
+    say(f"samples : {matrixio.DATA_DIR}")
+
+    exact = [2 - 2 * np.cos((k + 1) * np.pi / 201) for k in range(9)]
+    ok = {"solved": False}
+
+    def done(r, secs):
+        err = (max(abs(a - b) for a, b in zip(sorted(r.eigenvalues), exact))
+               if r.n_found == 9 else float("inf"))
+        say(f"solved  : info={r.info} found={r.n_found} in {secs:.2f}s")
+        say(f"accuracy: max error vs analytic = {err:.2e}")
+        ok["solved"] = r.info == 0 and r.n_found == 9 and err < 1e-10
+        app.quit()
+
+    def failed(msg):
+        say(f"FAILED  : {msg}")
+        app.quit()
+
+    w.emin.setValue(0.0)
+    w.emax.setValue(0.02)
+    w.m0.setValue(20)
+    w.worker = SolveWorker(w.matrix, None, dict(
+        emin=0.0, emax=0.02, m0=20, contour_points=8,
+        tol_exponent=12, max_loops=20))
+    w.worker.finished_ok.connect(done)
+    w.worker.failed.connect(failed)
+    w.worker.start()
+    QTimer.singleShot(120_000, app.quit)
+    app.exec()
+
+    say("SELFTEST PASS" if ok["solved"] else "SELFTEST FAIL")
+    flush()
+    return 0 if ok["solved"] else 1
+
+
 def main():
     # Solves run in a child process. In a bundled app sys.executable is this
     # program, so the child would relaunch the GUI; the flag routes it to the
@@ -1024,6 +1089,9 @@ def main():
     if getattr(sys, "frozen", False) and os.environ.get(runner.CHILD_ENV_FLAG):
         from feastpy import _solve_child
         return _solve_child.main(sys.argv[1:])
+
+    if "--selftest" in sys.argv:
+        return selftest()
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)

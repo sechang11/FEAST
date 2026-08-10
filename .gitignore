@@ -39,3 +39,10 @@ web/shots/
 web/_upload*
 gui/qa_win*/
 gui/qa*.png
+
+# App bundles
+dist/
+build/pyi/
+*.spec.bak
+feast-selftest.txt
+selftest.txt

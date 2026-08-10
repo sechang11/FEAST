@@ -11,15 +11,19 @@ real thing, and the wall is honest.
 """
 from __future__ import annotations
 
-import io
+import os
+import shutil
 import sys
+import tempfile
+import threading
 import time
+from collections import defaultdict, deque
 from pathlib import Path
 
 import numpy as np
 import scipy.sparse as sp
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -37,7 +41,69 @@ MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 MAX_M0 = 300
 SOLVE_TIMEOUT_S = 30
 
+# A solve is real CPU work, so the expensive endpoints are rate limited per
+# client and the number running at once is capped. Without the concurrency cap
+# a handful of requests can occupy every worker thread and the site stops
+# responding at all.
+RATE_LIMIT_REQUESTS = int(os.environ.get("FEAST_RATE_LIMIT", "20"))
+RATE_LIMIT_WINDOW_S = 60
+MAX_CONCURRENT_SOLVES = int(os.environ.get("FEAST_MAX_CONCURRENT", "4"))
+
+_solve_slots = threading.BoundedSemaphore(MAX_CONCURRENT_SOLVES)
+_hits: dict[str, deque] = defaultdict(deque)
+_hits_lock = threading.Lock()
+
 app = FastAPI(title="FEAST", docs_url=None, redoc_url=None)
+
+
+def _client_key(request: Request) -> str:
+    # Behind a proxy the peer address is the proxy; trust the first hop of
+    # X-Forwarded-For only when explicitly told to, so the limit cannot be
+    # bypassed by spoofing the header on a direct connection.
+    if os.environ.get("FEAST_TRUST_PROXY"):
+        fwd = request.headers.get("x-forwarded-for", "")
+        if fwd:
+            return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def rate_limit(request: Request) -> None:
+    key = _client_key(request)
+    now = time.monotonic()
+    with _hits_lock:
+        q = _hits[key]
+        while q and now - q[0] > RATE_LIMIT_WINDOW_S:
+            q.popleft()
+        if len(q) >= RATE_LIMIT_REQUESTS:
+            retry = int(RATE_LIMIT_WINDOW_S - (now - q[0])) + 1
+            raise HTTPException(429, f"Too many requests. Try again in {retry}s. "
+                                     "The desktop app has no such limit.")
+        q.append(now)
+        if len(_hits) > 10_000:            # bound the table itself
+            for k in [k for k, v in _hits.items() if not v][:5000]:
+                _hits.pop(k, None)
+
+
+@app.middleware("http")
+async def guard(request: Request, call_next):
+    """Reject oversized bodies before they are read, and set security headers."""
+    if request.method == "POST":
+        declared = request.headers.get("content-length")
+        if declared and int(declared) > MAX_UPLOAD_BYTES * 3:
+            return JSONResponse(
+                {"detail": f"Request body exceeds the "
+                           f"{MAX_UPLOAD_BYTES * 3 // (1024*1024)} MB limit."},
+                status_code=413)
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    # The pages load nothing from anywhere else, so lock that in.
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; img-src 'self' data:; style-src 'self'; "
+        "script-src 'self'; base-uri 'none'; form-action 'none'")
+    return response
 
 
 class SolveRequest(BaseModel):
@@ -55,19 +121,22 @@ def _parse(text: str, what: str):
     if len(text.encode("utf-8", "ignore")) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, f"{what} is larger than the "
                                  f"{MAX_UPLOAD_BYTES // (1024*1024)} MB free-tier limit.")
-    tmp = HERE / "_upload.tmp"
+    # A per-request temp directory: a fixed filename would be clobbered by
+    # concurrent requests, and two users would silently read each other's
+    # matrices.
+    tmpdir = Path(tempfile.mkdtemp(prefix="feast-web-"))
     try:
         # matrixio owns every format quirk (banner-less .mtx, Fortran D
         # exponents); going through it keeps the web and desktop paths identical.
-        tmp.write_text(text, encoding="utf-8")
-        tmp_named = tmp.with_suffix(".mtx")
-        tmp.replace(tmp_named)
-        M = matrixio.load_matrix(tmp_named)
+        target = tmpdir / "upload.mtx"
+        target.write_text(text, encoding="utf-8")
+        M = matrixio.load_matrix(target)
     except matrixio.MatrixLoadError as exc:
         raise HTTPException(400, f"Could not read {what}: {exc}")
+    except Exception as exc:                      # malformed input, not a crash
+        raise HTTPException(400, f"Could not read {what}: {exc}")
     finally:
-        for p in (HERE / "_upload.tmp", HERE / "_upload.mtx"):
-            p.unlink(missing_ok=True)
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
     if M.shape[0] != M.shape[1]:
         raise HTTPException(400, f"{what} must be square, got "
@@ -93,7 +162,8 @@ def _parse(text: str, what: str):
 
 
 @app.post("/api/bounds")
-def api_bounds(req: SolveRequest):
+def api_bounds(req: SolveRequest, request: Request):
+    rate_limit(request)
     A = _parse(req.matrix, "The matrix")
     B = _parse(req.b_matrix, "The B matrix") if req.b_matrix else None
     try:
@@ -107,7 +177,8 @@ def api_bounds(req: SolveRequest):
 
 
 @app.post("/api/estimate")
-def api_estimate(req: SolveRequest):
+def api_estimate(req: SolveRequest, request: Request):
+    rate_limit(request)
     A = _parse(req.matrix, "The matrix")
     B = _parse(req.b_matrix, "The B matrix") if req.b_matrix else None
     if req.emin >= req.emax:
@@ -119,7 +190,8 @@ def api_estimate(req: SolveRequest):
 
 
 @app.post("/api/solve")
-def api_solve(req: SolveRequest):
+def api_solve(req: SolveRequest, request: Request):
+    rate_limit(request)
     A = _parse(req.matrix, "The matrix")
     B = _parse(req.b_matrix, "The B matrix") if req.b_matrix else None
     if req.emin >= req.emax:
@@ -130,32 +202,40 @@ def api_solve(req: SolveRequest):
                   contour_points=req.contour_points,
                   tol_exponent=req.tol_exponent, max_loops=req.max_loops)
 
+    # Cap simultaneous solves: each one is a child process doing real numerical
+    # work, and without this a few requests saturate the machine.
+    if not _solve_slots.acquire(timeout=15):
+        raise HTTPException(503, "The calculator is busy. Try again shortly, or "
+                                 "use the desktop app, which runs locally.")
     # Same child-process runner the desktop app uses, so a runaway solve can be
     # killed rather than pinning a request thread forever.
     handle = feastpy.runner.start_solve(A, B, params)
     convergence, t0 = [], time.perf_counter()
     result = None
-    while time.perf_counter() - t0 < SOLVE_TIMEOUT_S:
-        out = handle.poll(0.2)
-        if out is None:
-            continue
-        if out[0] == "progress":
-            convergence.append(out[1])
-            continue
-        kind, payload, secs = out
-        handle.close()
-        if kind == "error":
-            raise HTTPException(500, f"Solver failed: {payload}")
-        result = (payload, secs)
-        break
+    try:
+        while time.perf_counter() - t0 < SOLVE_TIMEOUT_S:
+            out = handle.poll(0.2)
+            if out is None:
+                continue
+            if out[0] == "progress":
+                convergence.append(out[1])
+                continue
+            kind, payload, secs = out
+            if kind == "error":
+                raise HTTPException(500, f"Solver failed: {payload}")
+            result = (payload, secs)
+            break
 
-    if result is None:
-        handle.cancel()
+        if result is None:
+            handle.cancel()
+            raise HTTPException(408,
+                                f"The solve exceeded the {SOLVE_TIMEOUT_S}s free-tier "
+                                "limit. Try a narrower interval, a smaller M0, or use "
+                                "the desktop app, which has no time limit.")
+    finally:
+        handle.cancel()          # no-op if it already finished
         handle.close()
-        raise HTTPException(408,
-                            f"The solve exceeded the {SOLVE_TIMEOUT_S}s free-tier "
-                            "limit. Try a narrower interval, a smaller M0, or use "
-                            "the desktop app, which has no time limit.")
+        _solve_slots.release()
 
     r, secs = result
     diag = feastpy.diagnostics.diagnose(

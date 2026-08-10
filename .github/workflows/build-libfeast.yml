@@ -132,6 +132,25 @@ jobs:
           name: libfeast-${{ matrix.arch }}
           path: 4.0/lib/${{ matrix.arch }}/
 
+      # ------------------------------------------------------------- package
+      # The bundle is self-tested in a stripped environment, because a build
+      # that only runs on the machine that produced it proves nothing.
+      - name: Package the desktop app
+        shell: bash
+        env:
+          MINGW_BIN: ${{ steps.msys2.outputs.msys2-location }}\mingw64\bin
+        run: |
+          python -m pip install pyinstaller
+          bash packaging/build-app.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FEAST-app-${{ matrix.arch }}
+          path: |
+            dist/FEAST-${{ matrix.arch }}/
+            dist/FEAST.app/
+          if-no-files-found: warn
+
   universal:
     name: macos-universal
     needs: build

@@ -1,6 +1,7 @@
 """Loading matrices from the formats users actually have on disk."""
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -176,7 +177,21 @@ def is_probably_spd(B, samples: int = 12) -> bool:
     return True
 
 
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "4.0" / "utility" / "data"
+def _data_dir() -> Path:
+    """Where FEAST's sample matrices live.
+
+    A frozen app has no source tree above the package, so the bundled copy
+    (added by the PyInstaller spec) is checked first.
+    """
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        for cand in (base / "feast_data", base / "4.0" / "utility" / "data"):
+            if cand.is_dir():
+                return cand
+    return Path(__file__).resolve().parent.parent.parent / "4.0" / "utility" / "data"
+
+
+DATA_DIR = _data_dir()
 
 
 def _feast_sample(name: str):
