@@ -1,11 +1,12 @@
 """feastpy -- Python interface to the FEAST eigenvalue solver."""
-from . import codegen, diagnostics, matrixio, results_io, runner
+from . import codegen, diagnostics, matrixio, raw, results_io, runner
 from ._lib import FeastLibraryNotFound, load
 from .results_io import save_results
 from .solver import (
     FeastError,
     FeastResult,
     eigh_interval,
+    eig_disc,
     eigsh_interval,
     estimate_count,
     explain_info,
@@ -15,6 +16,8 @@ from .solver import (
 __all__ = [
     "eigh_interval",
     "eigsh_interval",
+    "eig_disc",
+    "raw",
     "estimate_count",
     "spectral_bounds",
     "FeastResult",

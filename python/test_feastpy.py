@@ -271,6 +271,67 @@ results.append(check("success with poor residuals still warns",
                      any(s.param == "tol_exponent" for s in hi_res.suggestions),
                      f"{len(hi_res.suggestions)} suggestions"))
 
+# --- raw layer: every routine in the library callable ------------------------
+from feastpy import raw
+
+sigs = raw.signatures()
+results.append(check("header signatures parsed", len(sigs) > 150, f"{len(sigs)} routines"))
+avail = raw.available()
+results.append(check("library exports most of them", len(avail) > 100,
+                     f"{len(avail)} present in this build"))
+
+# A raw call must agree exactly with the high-level wrapper: same routine, same
+# arguments, so any disagreement means the wrapper is marshalling wrongly.
+_fpm = raw.new_fpm(fpm_1=0, fpm_2=8, fpm_3=12, fpm_4=20)
+_m0 = 20
+_lam = np.zeros(_m0); _q = np.zeros((N, _m0), order="F"); _res = np.zeros(_m0)
+_out = raw.call("dfeast_syev", UPLO="F", N=N, A=np.asfortranarray(laplacian()), LDA=N,
+                fpm=_fpm, epsout=0.0, loop=0, Emin=0.0, Emax=0.05, M0=_m0,
+                **{"lambda": _lam}, q=_q, mode=0, res=_res, info=0)
+_hi = feastpy.eigh_interval(laplacian(), 0.0, 0.05, m0=20)
+results.append(check("raw call matches the high-level wrapper",
+                     _out["info"] == 0 and _out["mode"] == _hi.n_found
+                     and np.allclose(_lam[:_out["mode"]], _hi.eigenvalues),
+                     f"info={_out['info']} mode={_out['mode']}"))
+
+try:
+    raw.call("dfeast_syev", N=N)
+    results.append(check("raw rejects an incomplete call", False, "no error"))
+except TypeError:
+    results.append(check("raw rejects an incomplete call", True))
+
+try:
+    raw.call("dfeast_sbev", UPLO="F")      # banded: needs SPIKE, absent by design
+    results.append(check("raw explains an absent routine", False, "no error"))
+except (RuntimeError, TypeError) as exc:
+    results.append(check("raw explains an absent routine", "SPIKE" in str(exc) or
+                         isinstance(exc, TypeError), type(exc).__name__))
+
+# --- non-Hermitian: eigenvalues off the real line -----------------------------
+# Block diagonal of [[1,2],[-2,1]] and [[3,1],[-1,3]]: eigenvalues 1+/-2i, 3+/-1i.
+_G = np.zeros((8, 8))
+for _i2, _b in enumerate([np.array([[1., 2.], [-2., 1.]])] * 2
+                         + [np.array([[3., 1.], [-1., 3.]])] * 2):
+    _G[2 * _i2:2 * _i2 + 2, 2 * _i2:2 * _i2 + 2] = _b
+
+_rg = feastpy.eig_disc(_G, center=1 + 2j, radius=0.5, m0=6)
+_err = (max(abs(v - (1 + 2j)) for v in _rg.eigenvalues) if _rg.n_found else float("inf"))
+results.append(check("non-Hermitian disc finds 1+2i", _rg.n_found > 0 and _err < 1e-10,
+                     f"routine={_rg.routine} found={_rg.n_found} maxerr={_err:.2e}"))
+results.append(check("general problem returns left eigenvectors",
+                     _rg.left_eigenvectors is not None
+                     and _rg.left_eigenvectors.shape[0] == 8,
+                     str(None if _rg.left_eigenvectors is None else _rg.left_eigenvectors.shape)))
+
+_rg2 = feastpy.eig_disc(_G, center=3 + 1j, radius=0.5, m0=6)
+_err2 = (max(abs(v - (3 + 1j)) for v in _rg2.eigenvalues) if _rg2.n_found else float("inf"))
+results.append(check("a different disc finds 3+1i", _rg2.n_found > 0 and _err2 < 1e-10,
+                     f"found={_rg2.n_found} maxerr={_err2:.2e}"))
+
+_rg3 = feastpy.eig_disc(_G, center=50 + 0j, radius=1.0, m0=6)
+results.append(check("empty disc reports nothing found", _rg3.n_found == 0,
+                     f"info={_rg3.info} found={_rg3.n_found}"))
+
 # --- error handling ----------------------------------------------------------
 empty = feastpy.eigh_interval(laplacian(), 100.0, 200.0, m0=5)
 results.append(check("empty interval reports info=1", empty.info == 1 and empty.n_found == 0,

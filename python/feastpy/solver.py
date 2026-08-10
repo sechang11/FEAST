@@ -67,6 +67,10 @@ class FeastResult:
     epsout: float
     info: int
     subspace_used: int
+    # Set by eig_disc: the general (non-Hermitian) interfaces return left
+    # eigenvectors as well, and it helps to know which routine ran.
+    left_eigenvectors: Optional[np.ndarray] = None
+    routine: str = ""
 
     @property
     def converged(self) -> bool:
@@ -186,6 +190,159 @@ def eigh_interval(
         info=info.value,
         subspace_used=m0,
     )
+
+
+def eig_disc(
+    A,
+    center: complex,
+    radius: float,
+    B=None,
+    *,
+    m0: Optional[int] = None,
+    contour_points: int = 8,
+    tol_exponent: int = 12,
+    max_loops: int = 20,
+    uplo: str = "F",
+    verbose: bool = False,
+) -> FeastResult:
+    """Eigenvalues inside a disc of the complex plane.
+
+    This is the non-Hermitian and complex-symmetric side of FEAST. Those
+    spectra are not real, so there is no interval to search: the contour is a
+    circle of `radius` about `center`, and the eigenvalues come back complex.
+
+    Dispatches to:
+      * ``zfeast_sy{ev,gv}`` / ``zfeast_scsr{ev,gv}``  complex *symmetric*
+        (A == A.T, not conjugated -- a different problem from Hermitian)
+      * ``dfeast_ge{ev,gv}`` / ``dfeast_gcsr{ev,gv}``  real non-symmetric
+      * ``zfeast_ge{ev,gv}`` / ``zfeast_gcsr{ev,gv}``  complex general
+
+    For general problems FEAST returns right *and* left eigenvectors: the
+    result's ``eigenvectors`` holds the right ones and ``left_eigenvectors``
+    the left ones. Residuals likewise come in pairs.
+    """
+    import scipy.sparse as sp
+
+    sparse = sp.issparse(A)
+    n = A.shape[0]
+    if A.shape[0] != A.shape[1]:
+        raise ValueError(f"A must be square, got shape {A.shape}")
+    if radius <= 0:
+        raise ValueError(f"radius must be positive, got {radius}")
+
+    complex_in = np.iscomplexobj(A.data if sparse else A) or (
+        B is not None and np.iscomplexobj(B.data if sp.issparse(B) else B))
+
+    # Complex symmetric is its own interface; it is not Hermitian and not
+    # general, and using the wrong one silently gives wrong answers.
+    sym, herm = _symmetry(A)
+    complex_symmetric = complex_in and sym and not herm
+
+    if m0 is None:
+        m0 = min(n, max(10, n // 4))
+    m0 = int(min(m0, n))
+
+    fpm = _make_fpm(contour_points, tol_exponent, max_loops, verbose)
+
+    if complex_symmetric:
+        prefix, kind, ncols = "z", "sy", 1
+    else:
+        prefix, kind, ncols = ("z" if complex_in else "d"), "ge", 2
+    tail = "gv" if B is not None else "ev"
+    name = (f"{prefix}feast_{kind}{tail}" if not sparse else
+            f"{prefix}feast_{'s' if complex_symmetric else 'g'}csr{tail}")
+
+    # The MATRIX dtype follows the routine prefix, not the result: dfeast_ge*
+    # takes a real double* A even though its eigenvalues are complex. Passing a
+    # complex array there makes FEAST read interleaved re/im pairs as
+    # consecutive reals -- a garbled matrix that still "solves", just wrongly.
+    mat_dtype = np.complex128 if prefix == "z" else np.float64
+    dtype = np.complex128            # eigenvalues and eigenvectors are complex
+
+    lam = np.zeros(m0, dtype=dtype)
+    q = np.zeros((n, ncols * m0), dtype=dtype, order="F")
+    res = np.zeros(ncols * m0, dtype=np.float64)
+
+    emid = np.array([complex(center).real, complex(center).imag], dtype=np.float64)
+    r_c = _d(float(radius))
+    epsout, loop, mode, info = _d(0.0), _i(0), _i(0), _i(0)
+    n_c, lda, m0_c = _i(n), _i(n), _i(m0)
+    uplo_c = ctypes.c_char(uplo.upper().encode()[:1])
+
+    args: list = []
+    if complex_symmetric and not sparse:
+        args.append(ctypes.byref(uplo_c))          # only the sy interfaces take UPLO
+    args.append(ctypes.byref(n_c))
+
+    if sparse:
+        A = _as_uplo(sp.csr_matrix(A), uplo.upper() if complex_symmetric else "F")
+        A.sort_indices()
+        sa = np.ascontiguousarray(A.data, dtype=mat_dtype)
+        isa = np.ascontiguousarray(A.indptr + 1, dtype=np.int32)
+        jsa = np.ascontiguousarray(A.indices + 1, dtype=np.int32)
+        if complex_symmetric:
+            args.insert(0, ctypes.byref(uplo_c))
+        args += [sa.ctypes.data_as(ctypes.c_void_p),
+                 isa.ctypes.data_as(ctypes.POINTER(_i)),
+                 jsa.ctypes.data_as(ctypes.POINTER(_i))]
+        if B is not None:
+            Bm = _as_uplo(sp.csr_matrix(B), uplo.upper() if complex_symmetric else "F")
+            Bm.sort_indices()
+            sb = np.ascontiguousarray(Bm.data, dtype=mat_dtype)
+            isb = np.ascontiguousarray(Bm.indptr + 1, dtype=np.int32)
+            jsb = np.ascontiguousarray(Bm.indices + 1, dtype=np.int32)
+            args += [sb.ctypes.data_as(ctypes.c_void_p),
+                     isb.ctypes.data_as(ctypes.POINTER(_i)),
+                     jsb.ctypes.data_as(ctypes.POINTER(_i))]
+    else:
+        A = np.asfortranarray(A, dtype=mat_dtype)
+        args += [A.ctypes.data_as(ctypes.c_void_p), ctypes.byref(lda)]
+        if B is not None:
+            B = np.asfortranarray(B, dtype=mat_dtype)
+            args += [B.ctypes.data_as(ctypes.c_void_p), ctypes.byref(lda)]
+
+    args += [
+        fpm.ctypes.data_as(ctypes.POINTER(_i)),
+        ctypes.byref(epsout), ctypes.byref(loop),
+        emid.ctypes.data_as(ctypes.c_void_p), ctypes.byref(r_c),
+        ctypes.byref(m0_c),
+        lam.ctypes.data_as(ctypes.c_void_p),
+        q.ctypes.data_as(ctypes.c_void_p),
+        ctypes.byref(mode),
+        res.ctypes.data_as(ctypes.c_void_p),
+        ctypes.byref(info),
+    ]
+    _lib.sym(name)(*args)
+
+    m = max(0, mode.value)
+    right = q[:, :m].copy()
+    left = q[:, m0:m0 + m].copy() if ncols == 2 else None
+    out = FeastResult(
+        eigenvalues=lam[:m].copy(),
+        eigenvectors=right,
+        residuals=res[:m].copy(),
+        n_found=m,
+        loops=loop.value,
+        epsout=epsout.value,
+        info=info.value,
+        subspace_used=m0,
+    )
+    out.left_eigenvectors = left
+    out.routine = name
+    return out
+
+
+def _symmetry(M, tol: float = 1e-10) -> tuple[bool, bool]:
+    import scipy.sparse as sp
+    if sp.issparse(M):
+        d = abs(M - M.T)
+        sym = (d.max() if d.nnz else 0.0) <= tol
+        dh = abs(M - M.getH())
+        herm = (dh.max() if dh.nnz else 0.0) <= tol
+        return bool(sym), bool(herm)
+    M = np.asarray(M)
+    return (bool(np.allclose(M, M.T, atol=tol)),
+            bool(np.allclose(M, M.conj().T, atol=tol)))
 
 
 def spectral_bounds(A, B=None) -> tuple[float, float]:
