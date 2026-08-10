@@ -280,7 +280,57 @@ def _poll():
                 check("solver process terminated", not alive, f"pid={pid}")
             except ImportError:
                 print("  SKIP  solver process terminated (psutil not installed)")
+
+            # --- actionable diagnostics ---------------------------------
+            print("\ndiagnostics:")
+            from PySide6.QtWidgets import QMessageBox
+            # _offer_fix is modal; stub exec() so it cannot block the harness.
+            QMessageBox.exec = lambda self, *a, **k: 0
+            w.auto_m0.setChecked(False)     # we want to SEE info=3, not auto-fix it
+            names = [w.demo_combo.itemText(i) for i in range(w.demo_combo.count())]
+            w.demo_combo.setCurrentText([n for n in names if "n=200" in n][0])
+            w.emin.setValue(0.0)
+            w.emax.setValue(0.02)
+            w.m0.setValue(2)                # deliberately too small
+            w.result = None
+            state["phase"] = "diagnosing"
+            state["ticks"] = 0
+            w.solve()
+            return
             finish()
+        return
+
+    if state["phase"] == "diagnosing" and w.result is not None:
+        r = w.result
+        diag = w.diagnosis
+        check("undersized M0 produces info=3", r.info == 3, f"info={r.info}")
+        check("diagnosis attached", diag is not None and diag.info == r.info,
+              diag.headline if diag else "none")
+        fixes = [s for s in (diag.suggestions if diag else []) if s.actionable]
+        check("an applicable fix is offered", bool(fixes),
+              fixes[0].text if fixes else "none")
+        if fixes:
+            before = w.m0.value()
+            applied = w.apply_suggestion(fixes[0])
+            check("applying the fix changes the parameter",
+                  applied and w.m0.value() > before,
+                  f"M0 {before} -> {w.m0.value()}")
+            # and the fix must actually work
+            w.result = None
+            state["phase"] = "refixed"
+            state["ticks"] = 0
+            w.solve()
+        else:
+            finish()
+        return
+
+    if state["phase"] == "refixed" and w.result is not None:
+        r = w.result
+        check("the suggested fix resolves the problem", r.info == 0,
+              f"info={r.info} ({r.message}) found={r.n_found}")
+        check("and finds the expected 9 eigenvalues", r.n_found == 9,
+              f"found={r.n_found}")
+        finish()
         return
 
     if state["ticks"] > 160:

@@ -210,6 +210,65 @@ with tempfile.TemporaryDirectory() as td:
     except ValueError:
         results.append(check("exporting nothing is refused", True))
 
+# --- diagnostics --------------------------------------------------------------
+from feastpy import diagnostics
+
+DIAG_KW = dict(n=N, m0=20, contour_points=8, tol_exponent=12, max_loops=20,
+               emin=0.0, emax=0.05, bounds=(0.0, 4.0))
+
+# A real info=3 must produce a bigger M0 than the one that failed.
+small = feastpy.eigh_interval(laplacian(), 0.0, 0.05, m0=2)
+d3 = diagnostics.diagnose(small, **{**DIAG_KW, "m0": 2})
+fix = next((s for s in d3.suggestions if s.param == "m0"), None)
+results.append(check("info=3 suggests a larger M0",
+                     d3.info == 3 and fix is not None and fix.value > 2,
+                     f"{d3.headline}: M0 -> {fix.value if fix else None}"))
+
+# A real info=1 must offer the full spectrum.
+none_found = feastpy.eigh_interval(laplacian(), 100.0, 200.0, m0=5)
+d1 = diagnostics.diagnose(none_found, **{**DIAG_KW, "emin": 100.0, "emax": 200.0})
+iv = next((s for s in d1.suggestions if s.param == "interval"), None)
+results.append(check("info=1 offers the full spectrum",
+                     d1.info == 1 and iv is not None and iv.value == (0.0, 4.0),
+                     f"{d1.headline}: interval -> {iv.value if iv else None}"))
+
+# Success is not silent when the residuals are poor.
+good = feastpy.eigh_interval(laplacian(), 0.0, 0.05, m0=20)
+d0 = diagnostics.diagnose(good, **DIAG_KW)
+results.append(check("clean success suggests nothing",
+                     d0.ok and not d0.suggestions, f"{len(d0.suggestions)} suggestions"))
+
+
+class _Fake:
+    def __init__(self, info, n_found=0, loops=20, epsout=1e-3, residuals=()):
+        self.info, self.n_found, self.loops = info, n_found, loops
+        self.epsout, self.residuals = epsout, list(residuals) or [0.0]
+        self.message = feastpy.explain_info(info)
+
+
+# Every code must yield a headline and never raise.
+codes_ok = True
+for code in (0, 1, 2, 3, 4, 5, 6, 200, 201, 202, 143, -1, -2, -3, 999):
+    try:
+        dd = diagnostics.diagnose(_Fake(code, n_found=3), **DIAG_KW)
+        if not dd.headline or not isinstance(dd.suggestions, list):
+            codes_ok = False
+    except Exception as exc:
+        print(f"    diagnose({code}) raised {exc}")
+        codes_ok = False
+results.append(check("every info code diagnoses cleanly", codes_ok))
+
+d2 = diagnostics.diagnose(_Fake(2), **DIAG_KW)
+results.append(check("info=2 suggests more loops and more contour points",
+                     {s.param for s in d2.suggestions} >=
+                     {"max_loops", "contour_points", "tol_exponent"},
+                     ", ".join(s.param for s in d2.suggestions if s.param)))
+
+hi_res = diagnostics.diagnose(_Fake(0, n_found=2, residuals=[1e-3]), **DIAG_KW)
+results.append(check("success with poor residuals still warns",
+                     any(s.param == "tol_exponent" for s in hi_res.suggestions),
+                     f"{len(hi_res.suggestions)} suggestions"))
+
 # --- error handling ----------------------------------------------------------
 empty = feastpy.eigh_interval(laplacian(), 100.0, 200.0, m0=5)
 results.append(check("empty interval reports info=1", empty.info == 1 and empty.n_found == 0,

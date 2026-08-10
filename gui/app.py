@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 import feastpy
-from feastpy import codegen, matrixio, results_io, runner
+from feastpy import codegen, diagnostics, matrixio, results_io, runner
 
 APP_NAME = "FEAST Eigensolver"
 
@@ -195,6 +195,7 @@ class MainWindow(QMainWindow):
         self.result = None
         self.bounds = None
         self.convergence = []
+        self.diagnosis = None
         self._syncing = False
         self.solving = False
         self.worker: SolveWorker | None = None
@@ -804,9 +805,71 @@ class MainWindow(QMainWindow):
             self.zoom_out_btn.setEnabled(self.bounds is not None)
         self.export_btn.setEnabled(r.n_found > 0)
 
-        if r.info not in (0, 1):
-            QMessageBox.information(self, APP_NAME,
-                                    f"FEAST returned info={r.info}:\n\n{r.message}")
+        self.diagnosis = self._diagnose(r)
+        for sug in self.diagnosis.suggestions:
+            self._log(f"  hint: {sug.text}")
+        if r.info != 0:
+            self._offer_fix(self.diagnosis)
+
+    def _diagnose(self, r):
+        return diagnostics.diagnose(
+            r, n=int(self.matrix.shape[0]), m0=self.m0.value(),
+            contour_points=self.contour.value(), tol_exponent=self.tol.value(),
+            max_loops=self.loops.value(),
+            emin=self.emin.value(), emax=self.emax.value(),
+            bounds=self.bounds)
+
+    def apply_suggestion(self, sug) -> bool:
+        """Apply a suggested parameter change. Returns True if anything changed."""
+        if not sug.actionable:
+            return False
+        if sug.param == "m0":
+            self.m0.setValue(int(sug.value))
+        elif sug.param == "max_loops":
+            self.loops.setValue(int(sug.value))
+        elif sug.param == "contour_points":
+            self.contour.setValue(int(sug.value))
+        elif sug.param == "tol_exponent":
+            self.tol.setValue(int(sug.value))
+        elif sug.param == "interval":
+            lo, hi = sug.value
+            self.emin.setValue(float(lo))
+            self.emax.setValue(float(hi))
+        else:
+            return False
+        self._log(f"  applied: {sug.text}")
+        return True
+
+    def _offer_fix(self, diag):
+        """Show what went wrong and offer to fix it in one click.
+
+        A status code the user has to look up is a dead end; the fix is usually
+        a single parameter, so make that the default button.
+        """
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning if diag.info > 0 else QMessageBox.Critical)
+        box.setWindowTitle(APP_NAME)
+        box.setText(diag.headline)
+        body = diag.detail
+        others = [s for s in diag.suggestions if not s.actionable]
+        if others:
+            body += "\n\n" + "\n".join("- " + s.text for s in others)
+        box.setInformativeText(body)
+
+        fixes = [s for s in diag.suggestions if s.actionable]
+        buttons = []
+        for sug in fixes[:2]:
+            btn = box.addButton(sug.text, QMessageBox.ActionRole)
+            buttons.append((btn, sug))
+        close = box.addButton("Close", QMessageBox.RejectRole)
+        box.setDefaultButton(buttons[0][0] if buttons else close)
+        box.exec()
+
+        for btn, sug in buttons:
+            if box.clickedButton() is btn:
+                if self.apply_suggestion(sug):
+                    self.solve()
+                return
 
     @Slot(str)
     def on_failed(self, msg: str):
