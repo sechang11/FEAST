@@ -220,7 +220,14 @@ def _poll():
         c_src = generated["C"]
         (code_dir / "gen.c").write_text(c_src, encoding="utf-8")
         root = Path(__file__).resolve().parent.parent
-        arch = "windows-x64" if sys.platform == "win32" else "linux-x64"
+        # Must match build-feast.sh's <os>-<arch> tag. Assuming linux-x64 for
+        # everything non-Windows made this check silently SKIP on macOS.
+        import platform
+        os_tag = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
+        mach_tag = {"amd64": "x64", "x86_64": "x64", "x64": "x64",
+                    "arm64": "arm64", "aarch64": "arm64"}.get(
+                        platform.machine().lower(), "x64")
+        arch = f"{os_tag}-{mach_tag}"
         lib = root / "4.0" / "lib" / arch / "libfeast.a"
         if lib.exists():
             # Same split as build/run-test.sh: compile the C with the C
@@ -313,37 +320,52 @@ def _poll():
             finish()
         return
 
-    if state["phase"] == "diagnosing" and w.result is not None:
+    if state["phase"] in ("diagnosing", "refixed") and w.result is not None:
         r = w.result
         diag = w.diagnosis
-        check("undersized M0 produces info=3", r.info == 3, f"info={r.info}")
-        check("diagnosis attached", diag is not None and diag.info == r.info,
-              diag.headline if diag else "none")
-        fixes = [s for s in (diag.suggestions if diag else []) if s.actionable]
-        check("an applicable fix is offered", bool(fixes),
-              fixes[0].text if fixes else "none")
-        if fixes:
-            before = w.m0.value()
-            applied = w.apply_suggestion(fixes[0])
-            check("applying the fix changes the parameter",
-                  applied and w.m0.value() > before,
-                  f"M0 {before} -> {w.m0.value()}")
-            # and the fix must actually work
-            w.result = None
-            state["phase"] = "refixed"
-            state["ticks"] = 0
-            w.solve()
-        else:
-            finish()
-        return
+        first = state["phase"] == "diagnosing"
 
-    if state["phase"] == "refixed" and w.result is not None:
-        r = w.result
-        check("the suggested fix resolves the problem", r.info == 0,
-              f"info={r.info} ({r.message}) found={r.n_found}")
-        check("and finds the expected 9 eigenvalues", r.n_found == 9,
-              f"found={r.n_found}")
-        finish()
+        if first:
+            # Which code an undersized M0 produces is platform-dependent:
+            # info=3 on OpenBLAS, info=1 on Apple Silicon's Accelerate for the
+            # same input. What must hold is that it fails and is diagnosed.
+            check("undersized M0 fails", r.info != 0, f"info={r.info} ({r.message})")
+            check("diagnosis attached", diag is not None and diag.info == r.info,
+                  diag.headline if diag else "none")
+            state["attempts"] = 0
+
+        if r.info == 0:
+            check("the suggested fixes resolve the problem", True,
+                  f"after {state['attempts']} fix(es), found={r.n_found}")
+            check("and finds the expected 9 eigenvalues", r.n_found == 9,
+                  f"found={r.n_found}")
+            finish()
+            return
+
+        fixes = [s for s in (diag.suggestions if diag else []) if s.actionable]
+        if first:
+            check("an applicable fix is offered", bool(fixes),
+                  fixes[0].text if fixes else "none")
+        if not fixes or state["attempts"] >= 3:
+            check("the suggested fixes resolve the problem", False,
+                  f"gave up at info={r.info} after {state['attempts']} fix(es)")
+            finish()
+            return
+
+        before = (w.m0.value(), w.emin.value(), w.emax.value(),
+                  w.contour.value(), w.loops.value(), w.tol.value())
+        applied = w.apply_suggestion(fixes[0])
+        after = (w.m0.value(), w.emin.value(), w.emax.value(),
+                 w.contour.value(), w.loops.value(), w.tol.value())
+        if first:
+            check("applying the fix changes a parameter",
+                  applied and before != after, f"{before} -> {after}")
+
+        state["attempts"] += 1
+        state["phase"] = "refixed"
+        state["ticks"] = 0
+        w.result = None
+        w.solve()
         return
 
     if state["ticks"] > 160:

@@ -66,6 +66,17 @@ def diagnose(result, *, n: int, m0: int, contour_points: int, tol_exponent: int,
         headline = "No eigenvalues in this interval"
         detail = ("FEAST searched [%g, %g] and found nothing. The interval is "
                   "probably in a gap, or outside the spectrum." % (emin, emax))
+        # A subspace far too small to hold the interval's eigenvalues can make
+        # FEAST report "none here" rather than "too small" -- observed on
+        # Apple Silicon (Accelerate) where other platforms return info=3 for
+        # the same input. Offer the M0 fix first when M0 looks implausible,
+        # otherwise the user is told there is nothing here when there is.
+        if m0 < max(10, n // 20):
+            s.append(Suggestion(
+                f"M0={m0} is very small for a matrix of size {n}; a subspace "
+                "that small can miss eigenvalues entirely. Try "
+                f"{min(n, max(10, n // 4))}.",
+                "m0", min(n, max(10, n // 4))))
         if bounds is not None:
             s.append(Suggestion(
                 f"Search the whole spectrum [{bounds[0]:.6g}, {bounds[1]:.6g}] "
