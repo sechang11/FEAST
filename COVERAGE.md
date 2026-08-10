@@ -79,6 +79,19 @@ These are callable through `raw` but have no convenience wrapper yet:
   MKL PARDISO for the inner solves. In an OpenBLAS build the IFEAST variants
   are the working choice, which is why `eigsh_interval` uses them.
 
+## macOS links OpenBLAS, not Accelerate
+
+FEAST's non-Hermitian routines do not work against Apple's Accelerate: they
+return `info=-3` ("internal error in the reduced eigenvalue solver") on both
+Apple Silicon and Intel, in a configuration-dependent way. Accelerate ships an
+old LAPACK. The Hermitian path is unaffected, so this stayed invisible until
+the general routines were exercised on macOS for the first time.
+
+`build/build-feast.sh` therefore prefers Homebrew's OpenBLAS on macOS and warns
+loudly if it falls back. That also makes the numerics identical on all four
+targets. If you build with Accelerate anyway, expect the Hermitian interfaces
+to work and the general ones to fail.
+
 ## A note on matrix dtypes
 
 `dfeast_ge*` returns complex eigenvalues but takes a **real** `double*` matrix.

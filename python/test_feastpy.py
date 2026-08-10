@@ -323,30 +323,14 @@ results.append(check("general problem returns left eigenvectors",
                      and _rg.left_eigenvectors.shape[0] == 8,
                      str(None if _rg.left_eigenvectors is None else _rg.left_eigenvectors.shape)))
 
-# DIAGNOSTIC (temporary): macos-x64 misses this eigenvalue while Windows,
-# Linux and macos-arm64 find it. Report the surrounding configurations from
-# every platform so the difference can be characterised instead of guessed at.
-print("  -- disc on 3+1i, configuration sweep --")
-_Gc = _G.astype(np.complex128); _Gc[0, 0] += 0j
-for _lbl, _M, _c, _r, _m, _cp in [
-        ("real   r=0.5 m0=6  cp=16", _G,  3 + 1j, 0.5, 6, 16),
-        ("real   r=0.5 m0=6  cp=32", _G,  3 + 1j, 0.5, 6, 32),
-        ("real   r=0.9 m0=6  cp=16", _G,  3 + 1j, 0.9, 6, 16),
-        ("real   r=0.5 m0=8  cp=16", _G,  3 + 1j, 0.5, 8, 16),
-        ("real   conj-symmetric   ", _G,  3 + 0j, 1.5, 6, 16),
-        ("cplx   r=0.5 m0=6  cp=16", _Gc, 3 + 1j, 0.5, 6, 16),
-        ("real   disc on 1+2i     ", _G,  1 + 2j, 0.5, 6, 16)]:
-    _d = feastpy.eig_disc(_M, center=_c, radius=_r, m0=_m, contour_points=_cp)
-    print(f"     {_lbl}: routine={_d.routine:14} info={_d.info} found={_d.n_found}")
-
+# The non-Hermitian path is sensitive to the LAPACK underneath: against Apple's
+# Accelerate it returned info=-3 ("internal error in the reduced eigenvalue
+# solver") on both Macs. The macOS builds link OpenBLAS for this reason, and
+# this assertion is what catches a regression there.
 _rg2 = feastpy.eig_disc(_G, center=3 + 1j, radius=0.5, m0=6)
 _err2 = (max(abs(v - (3 + 1j)) for v in _rg2.eigenvalues) if _rg2.n_found else float("inf"))
-if _rg2.n_found == 0:
-    print("  KNOWN  a different disc finds 3+1i -- not found on this platform "
-          "(see the sweep above); not failing the build while it is characterised")
-else:
-    results.append(check("a different disc finds 3+1i", _err2 < 1e-10,
-                         f"found={_rg2.n_found} maxerr={_err2:.2e}"))
+results.append(check("a different disc finds 3+1i", _rg2.n_found > 0 and _err2 < 1e-10,
+                     f"info={_rg2.info} found={_rg2.n_found} maxerr={_err2:.2e}"))
 
 # contour_points must actually reach the solver. A complex contour is a FULL
 # contour counted by fpm(8); setting only fpm(2) (the Hermitian half-contour)
