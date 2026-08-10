@@ -42,6 +42,7 @@ gui/qa*.png
 
 # App bundles
 dist/
+dist-new/
 build/pyi/
 *.spec.bak
 feast-selftest.txt
