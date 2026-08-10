@@ -11,7 +11,8 @@ python tools/coverage_report.py --markdown
 | | Count |
 |---|---:|
 | Entry points declared in FEAST's headers | 202 |
-| Present in the library we build | **120** |
+| Buildable and exercised (OpenBLAS + MKL + MPI) | **182** |
+| Present in the default OpenBLAS build | **120** |
 | Callable from `feastpy` | **120** (all of them, via `feastpy.raw`) |
 | Wrapped ergonomically | 12 |
 
@@ -87,18 +88,33 @@ Nothing is hand-transcribed, so the signatures cannot drift from the headers.
 A raw call is checked in the test suite to produce bit-identical results to the
 ergonomic wrapper for the same problem.
 
+## The optional builds
+
+Three optional pieces unlock the rest; see BUILDING-COMPLETE.md for exact
+commands and findings.
+
+| | Unlocks | Status |
+|---|---|---|
+| MKL 2021.4 | sparse polynomial, PARDISO | working, 26/26 examples |
+| MPI (Intel MPI) | 62 PFEAST routines | working, 35/36 examples |
+| SPIKE | 20 banded routines | **blocked: spike-solver.org's downloads 404** |
+
 ## Not reachable, and why
 
-**Banded (20 routines).** `dzfeast_banded.f90` calls into SPIKE
+**Banded (20 routines).** Every download on spike-solver.org returns 404, and no
+source is published, so the package cannot be obtained. `dzfeast_banded.f90`
+calls into SPIKE
 (`spikeinit_`, `?spike_gbtr?_`, `?gbmm_`), which upstream does not bundle —
 it is a separate download from spike-solver.org. The objects are in
 `libfeast.a` but excluded from the shared library, since a shared library must
 resolve every symbol at link time. To enable: build SPIKE and rebuild with
 `SPIKE_LIBS=-lspike`.
 
-**PFEAST (62 routines).** Distributed-memory FEAST needs MPI and a separate
-`libpfeast`, which we do not build. It targets clusters rather than a desktop
-application. To enable: `make pfeast` with an MPI compiler, then link it.
+**PFEAST (62 routines).** Now buildable: `build/build-pfeast.sh` produces
+`libpfeast.a`, and 35 of 36 distributed examples pass on 2, 4 and 8 ranks. It is
+not part of the desktop app -- it targets clusters -- and it needs Intel MPI
+rather than Open MPI, because MKL's cluster PARDISO segfaults against Open MPI's
+BLACS. See BUILDING-COMPLETE.md.
 
 ## Known gaps in the ergonomic layer
 

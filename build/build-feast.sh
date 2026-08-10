@@ -64,6 +64,15 @@ case "$FC" in
 esac
 [ "$MKL" = 1 ] && FFLAGS="$FFLAGS -DMKL"
 
+# FEAST 4.0 calls MKL's deprecated NIST-style sparse BLAS (mkl_?csrmm), which
+# Intel removed in recent oneMKL: 2026.x links with "undefined reference to
+# mkl_ccsrmm_". MKL 2021.4 still has them.
+if [ "$MKL" = 1 ] && [ -z "${BLAS_LIBS:-}" ]; then
+  echo "  !! --mkl needs BLAS_LIBS pointing at an MKL that still provides the" >&2
+  echo "     deprecated sparse BLAS (2021.x works, 2024+ does not). e.g.:" >&2
+  echo "     BLAS_LIBS=\"-L\$MKLROOT/lib -lmkl_gf_lp64 -lmkl_gnu_thread -lmkl_core -lgomp -lpthread -lm -ldl\"" >&2
+fi
+
 # ---- source list (mirrors 4.0/src/Makefile, serial FEAST only) --------------
 # Kernel first: the dense/banded/sparse layers use its modules.
 SOURCES="
