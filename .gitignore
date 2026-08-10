@@ -47,3 +47,7 @@ build/pyi/
 *.spec.bak
 feast-selftest.txt
 selftest.txt
+
+# Licence signing key -- must never be committed or shipped
+licensing/private_key.txt
+licensing/issued.csv

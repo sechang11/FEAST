@@ -53,7 +53,7 @@ for pattern in ("system1*.mtx", "system3*.mtx"):
 
 a = Analysis(
     [str(ROOT / "gui" / "app.py")],
-    pathex=[str(ROOT / "python")],
+    pathex=[str(ROOT / "python"), str(ROOT)],
     binaries=binaries,
     datas=datas,
     hiddenimports=[
@@ -61,6 +61,8 @@ a = Analysis(
         "feastpy.codegen", "feastpy.diagnostics", "feastpy.matrixio",
         "feastpy.results_io", "feastpy.solver",
         "scipy.io", "scipy.sparse.linalg", "scipy.spatial.transform._rotation",
+        "licensing", "licensing.keys", "licensing.machine",
+        "cryptography.hazmat.primitives.asymmetric.ed25519",
     ],
     excludes=[
         # Qt modules the app never touches; they roughly double the bundle.

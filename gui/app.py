@@ -10,6 +10,7 @@ from pathlib import Path
 
 # Allow running straight from the source tree without installing.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 import pyqtgraph as pg
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+import licensing
 import feastpy
 from feastpy import codegen, diagnostics, matrixio, results_io, runner
 
@@ -183,6 +185,91 @@ class CodeDialog(QDialog):
             Path(path).write_text(self.text.toPlainText(), encoding="utf-8")
 
 
+class LicenseDialog(QDialog):
+    """Show licence status, and take a pasted key.
+
+    The machine id is front and centre and selectable: a machine-locked licence
+    cannot be issued without it, so the buyer has to be able to send it easily.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Licence")
+        self.resize(620, 420)
+        lay = QVBoxLayout(self)
+
+        self.status = QLabel()
+        self.status.setWordWrap(True)
+        lay.addWidget(self.status)
+
+        box = QGroupBox("This computer")
+        bl = QVBoxLayout(box)
+        mid = QTextEdit()
+        mid.setReadOnly(True)
+        mid.setMaximumHeight(34)
+        mid.setPlainText(licensing.machine_id())
+        mid.setFont(QFont("Consolas" if sys.platform == "win32" else "Menlo", 11))
+        bl.addWidget(QLabel("Send this id when buying, so the licence can be "
+                            "issued for this machine:"))
+        bl.addWidget(mid)
+        lay.addWidget(box)
+
+        lay.addWidget(QLabel("Paste your licence key:"))
+        self.entry = QTextEdit()
+        self.entry.setFont(QFont("Consolas" if sys.platform == "win32" else "Menlo", 9))
+        lay.addWidget(self.entry, stretch=1)
+
+        row = QHBoxLayout()
+        self.apply_btn = QPushButton("Activate")
+        self.apply_btn.clicked.connect(self.activate)
+        row.addWidget(self.apply_btn)
+        self.remove_btn = QPushButton("Remove licence")
+        self.remove_btn.clicked.connect(self.remove)
+        row.addWidget(self.remove_btn)
+        row.addStretch(1)
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        row.addWidget(close)
+        lay.addLayout(row)
+
+        self.refresh()
+
+    def refresh(self):
+        st = licensing.load()
+        if st.licensed:
+            self.status.setText(
+                f"<b>Licensed</b> to {st.holder}<br>"
+                f"Updates included until {st.license.updates_until}.")
+        else:
+            extra = f"<br><span style='color:#c0392b'>{st.error}</span>" if st.error else ""
+            self.status.setText(
+                "<b>Free version.</b> Everything works; problem size is capped at "
+                f"{licensing.FREE_DENSE_N:,} dense / {licensing.FREE_SPARSE_N:,} "
+                f"sparse.{extra}")
+        self.remove_btn.setEnabled(st.licensed)
+
+    def activate(self):
+        try:
+            st = licensing.install(self.entry.toPlainText())
+        except licensing.LicenseError as exc:
+            QMessageBox.warning(self, APP_NAME, str(exc))
+            return
+        QMessageBox.information(self, APP_NAME,
+                                f"Thank you. Licensed to {st.holder}.")
+        self.entry.clear()
+        self.refresh()
+        if self.parent():
+            self.parent().refresh_license()
+
+    def remove(self):
+        if QMessageBox.question(self, APP_NAME,
+                                "Remove the licence from this computer?") == QMessageBox.Yes:
+            licensing.remove()
+            self.refresh()
+            if self.parent():
+                self.parent().refresh_license()
+
+
 class GenerateDialog(QDialog):
     """Make a random test matrix without needing a file.
 
@@ -307,9 +394,12 @@ class MainWindow(QMainWindow):
         self.worker: SolveWorker | None = None
         self.counter: CountWorker | None = None
 
+        self.license_status = licensing.load()
+
         self._build_ui()
         self._build_menu()
         self._check_library()
+        self.refresh_license()
         self.load_demo()
 
     # ---------------------------------------------------------------- UI ----
@@ -582,6 +672,9 @@ class MainWindow(QMainWindow):
         a.triggered.connect(self.close); m.addAction(a)
 
         h = self.menuBar().addMenu("&Help")
+        a = QAction("&Licence...", self)
+        a.triggered.connect(self.show_license)
+        h.addAction(a)
         a = QAction("&About", self)
         a.triggered.connect(self.about); h.addAction(a)
 
@@ -847,6 +940,8 @@ class MainWindow(QMainWindow):
         if dlg.exec() != QDialog.Accepted or not dlg.result_matrices:
             return
         A, B, label = dlg.result_matrices
+        if self._license_blocks(A):
+            return
         self.matrix = A
         self.matrix_path = None
         self.b_path = None
@@ -887,6 +982,8 @@ class MainWindow(QMainWindow):
                 "Results would be meaningless.")
             return
 
+        if self._license_blocks(M):
+            return
         self.matrix = M
         self.matrix_path = path
         self.b_matrix = None
@@ -1168,6 +1265,36 @@ class MainWindow(QMainWindow):
             iterative=True,
             matrix_path=self.matrix_path, b_path=self.b_path,
         )
+
+    @Slot()
+    def show_license(self):
+        LicenseDialog(self).exec()
+
+    def refresh_license(self):
+        self.license_status = licensing.load()
+        if self.license_status.licensed:
+            self.setWindowTitle(APP_NAME)
+        else:
+            self.setWindowTitle(f"{APP_NAME}  -  free version")
+
+    def _license_blocks(self, M) -> bool:
+        """Warn and refuse if this matrix is past the free-tier ceiling.
+
+        Checked when the matrix is loaded rather than when Solve is pressed, so
+        nobody configures a run and only then discovers the wall.
+        """
+        if self.license_status.licensed or M is None:
+            return False
+        sparse = sp.issparse(M)
+        why = licensing.check_size(int(M.shape[0]), sparse,
+                                   int(M.nnz) if sparse else 0)
+        if not why:
+            return False
+        QMessageBox.information(
+            self, APP_NAME,
+            why + "\n\nEverything else is unrestricted, and smaller problems "
+            "work normally. Help -> Licence has the machine id to buy one.")
+        return True
 
     @Slot()
     def show_code(self):
