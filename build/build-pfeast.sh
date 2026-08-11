@@ -17,11 +17,17 @@ SRC="$HERE/../4.0/src"
 MPIFC="${MPIFC:-mpif90}"
 MKL=0
 ARCH=""
+# MS-MPI ships no mpif90 wrapper for mingw: you compile with gfortran and point
+# it at the SDK yourself. These let that work without a wrapper.
+MPI_INC=""
+MPI_LIB=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --arch) ARCH="$2"; shift 2 ;;
     --mpifc) MPIFC="$2"; shift 2 ;;
+    --mpi-inc) MPI_INC="$2"; shift 2 ;;
+    --mpi-lib) MPI_LIB="$2"; shift 2 ;;
     --mkl)  MKL=1; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -30,6 +36,7 @@ done
 command -v "$MPIFC" >/dev/null 2>&1 || {
   echo "no MPI Fortran compiler ($MPIFC) on PATH." >&2
   echo "Install one, e.g.: micromamba install -c conda-forge openmpi" >&2
+  echo "or use a plain compiler with --mpifc gfortran --mpi-inc DIR --mpi-lib -lmsmpi" >&2
   exit 1
 }
 
@@ -75,7 +82,7 @@ sparse/pdzifeast_pev_sparse.f90
 
 echo "PFEAST build"
 echo "  platform : $OS/$MACH  (arch tag: $ARCH)"
-echo "  mpi      : $MPIFC  ($("$MPIFC" --version 2>/dev/null | head -1))"
+echo "  mpi      : $MPIFC ${MPI_INC:+(-I$MPI_INC)} ${MPI_LIB:+$MPI_LIB}"
 echo "  mkl      : $([ "$MKL" = 1 ] && echo yes || echo no)"
 echo
 
@@ -84,7 +91,7 @@ OBJECTS=""
 for s in $SOURCES; do
   o="$(basename "$s" .f90).o"
   echo "  MPIFC  $s"
-  "$MPIFC" $FFLAGS -I"$OBJ" -c "$SRC/$s" -o "$OBJ/$o"
+  "$MPIFC" $FFLAGS ${MPI_INC:+-I$MPI_INC} -I"$OBJ" -c "$SRC/$s" -o "$OBJ/$o"
   OBJECTS="$OBJECTS $OBJ/$o"
 done
 

@@ -13,6 +13,10 @@ ROOT="$(cd "$HERE/.." && pwd)"
 ARCH="${1:-linux-x64}"
 NP="${2:-2}"
 MPIFC="${MPIFC:-mpif90}"
+MPICC="${MPICC:-mpicc}"
+# MS-MPI ships no compiler wrappers for mingw: you compile with plain
+# gcc/gfortran and point them at the SDK headers yourself.
+MPI_INC="${MPI_INC:-}"
 MPIRUN="${MPIRUN:-mpirun}"
 # Open MPI needs --oversubscribe on a small machine; Intel MPI rejects it.
 # Note "-" not ":-": an explicitly empty MPIRUN_ARGS must stay empty,
@@ -51,10 +55,11 @@ for dir in "$ROOT"/4.0/example/PFEAST-*; do
 
     bin="$WORK/$base"
     if [[ "$name" == *.c ]]; then
-      mpicc -O2 -c "$src" -o "$bin.o" -I"$INC" 2>"$WORK/$base.build" \
+      "$MPICC" -O2 -c "$src" -o "$bin.o" -I"$INC" ${MPI_INC:+-I$MPI_INC} 2>"$WORK/$base.build" \
         && "$MPIFC" -o "$bin" "$bin.o" "$LIB" $BLAS -fopenmp -lm 2>>"$WORK/$base.build"
     else
-      "$MPIFC" -O2 -ffree-line-length-none -o "$bin" "$src" "$LIB" $BLAS -fopenmp \
+      "$MPIFC" -O2 -ffree-line-length-none ${MPI_INC:+-I$MPI_INC} \
+        -o "$bin" "$src" "$LIB" $BLAS -fopenmp \
         2>"$WORK/$base.build"
     fi
     if [ ! -x "$bin" ]; then
