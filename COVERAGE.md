@@ -58,9 +58,27 @@ solver with `#ifdef MKL`; upstream's own Makefile states that with `MKL=no`,
 the refinement loops to 100 and the contour points to 16 does not fix it, which
 is consistent with a missing direct solver rather than slow convergence.
 
-To confirm that reading and to get the sparse polynomial interfaces working,
-build against Intel oneAPI with `build/build-feast.sh --mkl`. That has not been
-tried here.
+### Sparse polynomial does not actually need MKL
+
+The example calls `dfeast_scsrpev`, the *direct* routine, which uses
+MKL-PARDISO. FEAST also ships `difeast_scsrpev` -- the same problem solved with
+an iterative inner solver, needing no PARDISO and no MKL.
+
+It converges once the inner solver is given sensible settings. `feastinit`
+defaults `fpm(45)` to an inner accuracy of 1e-1 with `fpm(46)`=40 iterations,
+which is far too loose for a polynomial problem:
+
+```c
+difeast_scsrpev(...)      /* instead of dfeast_scsrpev */
+fpm[44] = 5;              /* fpm(45): inner accuracy 1e-5 */
+fpm[45] = 500;            /* fpm(46): inner iterations   */
+fpm[3]  = 50;             /* fpm(4):  refinement loops   */
+```
+
+Verified on **Windows and Linux with OpenBLAS only**: `info=0`, converged below
+1e-12, 20 eigenvalues, ~1.6 s. So the capability is available on every platform,
+including Apple Silicon where MKL cannot run at all. MKL makes it faster and
+lets the shipped example run unmodified; it is not required for the maths.
 
 The `utility/` driver (`driver_feast_sparse`) builds and runs correctly; see
 RUNNING-THE-ORIGINAL.md, where it is used as the reference the app is checked

@@ -115,18 +115,27 @@ All three are self-contained: unzip and run. No Python, no compilers, nothing.
 |---|---|---|---|---|
 | Dense | ✅ | ✅ | ✅ | Works everywhere |
 | Sparse (iterative) | ✅ | ✅ | ✅ | Works everywhere |
-| Sparse polynomial | ⚠️ | ✅ | ❌ | Needs MKL. Linux verified; **Mac can't** — MKL is Intel-only, no Apple Silicon |
-| Banded | ❌ | ❌ | ❌ | Needs SPIKE, which nobody can download |
-| PFEAST (clusters) | ⚠️ | ✅ | ⚠️ | Needs MPI. Verified on Linux. Not a desktop feature anyway. |
+| Sparse polynomial | ✅ | ✅ | ✅ | Works everywhere using FEAST's *iterative* routine. Only the shipped **example** needs MKL, because it calls the direct one. |
+| Banded | ❌ | ❌ | ❌ | Needs SPIKE, which nobody can download — **including on Linux**. Not a platform problem. |
+| PFEAST (clusters) | ⚠️ | ✅ | ⚠️ | Needs MPI, which exists on all three. Only built and tested on Linux so far — effort, not a limit. Not a desktop feature anyway. |
 
-**Why Linux is ahead:** MKL and MPI install cleanly there with one command. On
-Windows the free compiler we use (mingw) doesn't match the format MKL ships in.
-On Apple Silicon, MKL simply doesn't exist — it's Intel-only, and Apple stopped
-making Intel Macs.
+**Why Linux looks ahead — and mostly isn't.** There is nothing Windows or macOS
+cannot do here. The differences are:
 
-**This is not a problem for the product.** The app uses the dense and sparse
-families, which work everywhere. MKL and PFEAST matter to someone running a
-cluster, not to someone opening a matrix on a laptop.
+- **MKL is optional, not required.** It is a speed-up and it lets FEAST's own
+  examples run unmodified. Every capability it unlocks is also reachable
+  without it, through FEAST's iterative routines. Tested.
+- **MKL on Windows** works, but with Intel's compiler rather than the free one
+  we use. That is a toolchain choice, not a Windows limit.
+- **MKL on Apple Silicon** genuinely does not exist — Intel only ships it for
+  Intel chips. It does not matter, because the iterative routines cover the
+  same ground.
+- **MPI exists on all three** (Microsoft MPI, Homebrew, Linux packages). We
+  built PFEAST on Linux only because that is where clusters live.
+
+**Nothing important is missing on any platform.** The single real gap is banded
+matrices, and that is missing *everywhere*, Linux included, because the SPIKE
+package cannot be downloaded by anyone.
 
 ### Why these aren't tested automatically
 
