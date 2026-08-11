@@ -13,7 +13,7 @@ python tools/coverage_report.py --markdown
 | Entry points declared in FEAST's headers | 202 |
 | Buildable and exercised (OpenBLAS + MKL + MPI) | **182** |
 | Present in the default OpenBLAS build | **120** |
-| Callable from `feastpy` | **120** in the default build; **140** with SPIKE |
+| Callable from `feastpy` | **140** with SPIKE (120 without) |
 | Wrapped ergonomically | 12 |
 
 The 82 declared-but-absent routines are not an oversight — they need components
@@ -115,7 +115,7 @@ commands and findings.
 |---|---|---|
 | MKL 2021.4 | sparse polynomial, PARDISO | working, 26/26 examples |
 | MPI (Intel MPI) | 62 PFEAST routines | working, 35/36 examples |
-| SPIKE | 20 banded routines | **working** — 36/36 examples pass |
+| SPIKE | 20 banded routines | **working on Windows and Linux**, and without MKL |
 
 ## Not reachable, and why
 

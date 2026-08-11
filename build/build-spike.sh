@@ -20,12 +20,14 @@ FC="${FC:-gfortran}"
 CC="${CC:-gcc}"
 SRC=""
 ARCH=""
+BLAS_COMPAT=1
 URL="${SPIKE_URL:-http://www.spike-solver.org/spike-1.0.tar.gz}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --src)  SRC="$2"; shift 2 ;;
     --arch) ARCH="$2"; shift 2 ;;
+    --no-blas-compat) BLAS_COMPAT=0; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -82,6 +84,18 @@ LIBSRC="$SRC/lib/$ARCH/libspike.a"
 DEST="$ROOT/4.0/lib/$ARCH"
 mkdir -p "$DEST"
 cp "$LIBSRC" "$DEST/libspike.a"
+
+# SPIKE's banded path calls DZGEMM/SCGEMM -- mixed real-by-complex products
+# that are MKL extensions, not standard BLAS. Without them a build against
+# OpenBLAS or Accelerate fails to link. Adding exact replacements makes banded
+# work on any BLAS, which is what makes it available off Linux/x86 at all.
+# Pass --no-blas-compat when linking against MKL, whose versions are faster.
+if [ "$BLAS_COMPAT" = 1 ]; then
+  echo "  adding DZGEMM/SCGEMM replacements (for non-MKL BLAS)"
+  "$FC" -O2 -fPIC -c "$HERE/spike_blas_compat.f90" -o "$WORK/spike_blas_compat.o"
+  ar r "$DEST/libspike.a" "$WORK/spike_blas_compat.o"
+  ranlib "$DEST/libspike.a"
+fi
 echo
 echo "installed: $DEST/libspike.a"
 

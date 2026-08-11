@@ -14,6 +14,7 @@ SRC="$HERE/../4.0/src"
 
 FC="${FC:-gfortran}"
 MKL=0
+SPIKE_ARG=""
 JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 ARCH=""
 
@@ -22,6 +23,12 @@ while [ $# -gt 0 ]; do
     --arch) ARCH="$2"; shift 2 ;;
     --fc)   FC="$2";   shift 2 ;;
     --mkl)  MKL=1;     shift ;;
+    # Explicit flag rather than the SPIKE_LIBS environment variable: exported
+    # variables do not reliably reach this script in every shell we build from,
+    # and silently getting a library without banded support is hard to notice.
+    --spike)
+      if [ $# -ge 2 ] && [ "${2#-}" = "$2" ]; then SPIKE_ARG="$2"; shift 2
+      else SPIKE_ARG="auto"; shift; fi ;;
     --jobs) JOBS="$2"; shift 2 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -122,6 +129,22 @@ ranlib "$LIB/libfeast.a"
 # only pulls the members you reference, so banded can stay in libfeast.a
 # harmlessly; a shared library must resolve everything at link time, so it is
 # excluded there. Set SPIKE_LIBS=-lspike to put it back in.
+# Resolve --spike into SPIKE_LIBS, searching where build-spike.sh installs.
+if [ -n "$SPIKE_ARG" ] && [ -z "${SPIKE_LIBS:-}" ]; then
+  if [ "$SPIKE_ARG" = auto ]; then
+    for d in "$LIB" "$HERE/../4.0/lib/$OS-$MACH"; do
+      [ -f "$d/libspike.a" ] && { SPIKE_LIBS="-L$d -lspike"; break; }
+    done
+    [ -n "${SPIKE_LIBS:-}" ] || { echo "  !! --spike given but no libspike.a found;" >&2
+                                  echo "     run build/build-spike.sh first" >&2; exit 1; }
+  elif [ -d "$SPIKE_ARG" ]; then
+    SPIKE_LIBS="-L$SPIKE_ARG -lspike"
+  else
+    SPIKE_LIBS="$SPIKE_ARG"
+  fi
+  echo "  spike    : $SPIKE_LIBS"
+fi
+
 SHARED_OBJECTS="$OBJECTS"
 if [ -z "${SPIKE_LIBS:-}" ]; then
   SHARED_OBJECTS="$(echo "$OBJECTS" | tr ' ' '\n' | grep -v 'dzfeast_banded.o' | tr '\n' ' ')"
