@@ -29,6 +29,15 @@ EX="$ROOT/4.0/example/FEAST"
 
 [ -f "$LIB" ] || { echo "no $LIB -- run build/build-feast.sh first" >&2; exit 1; }
 
+# Banded needs SPIKE. If a libspike.a sits beside libfeast.a, run those too.
+SPIKE="$ROOT/4.0/lib/$ARCH/libspike.a"
+if [ -f "$SPIKE" ]; then
+  SPIKE_LINK="$SPIKE"
+  echo "SPIKE found: banded examples will be attempted"
+else
+  SPIKE_LINK=""
+fi
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 cp "$EX"/*.mtx "$WORK"/ 2>/dev/null || true
@@ -45,7 +54,11 @@ for src in "$EX"/*.c "$EX"/*.f90; do
 
   # Banded needs SPIKE; PFEAST needs MPI. Neither is bundled.
   case "$base" in
-    *banded*|P*) echo "  SKIP  $name  (needs SPIKE)"; skip=$((skip+1)); continue ;;
+    *banded*)
+      if [ -z "$SPIKE_LINK" ]; then
+        echo "  SKIP  $name  (needs SPIKE)"; skip=$((skip+1)); continue
+      fi ;;
+    P*) echo "  SKIP  $name  (PFEAST: needs MPI)"; skip=$((skip+1)); continue ;;
   esac
 
   bin="$WORK/$base"
@@ -53,9 +66,9 @@ for src in "$EX"/*.c "$EX"/*.f90; do
     # Compile with cc, link with the Fortran driver: Apple's clang rejects
     # -fopenmp and does not know where libgfortran lives.
     cc -O2 -c "$src" -o "$bin.o" -I"$INC" 2>"$WORK/$base.build" \
-      && "$FC" -o "$bin" "$bin.o" "$LIB" $BLAS -fopenmp -lm 2>>"$WORK/$base.build"
+      && "$FC" -o "$bin" "$bin.o" "$LIB" $SPIKE_LINK $BLAS -fopenmp -lm 2>>"$WORK/$base.build"
   else
-    "$FC" -O2 -ffree-line-length-none -o "$bin" "$src" "$LIB" $BLAS -fopenmp 2>"$WORK/$base.build"
+    "$FC" -O2 -ffree-line-length-none -o "$bin" "$src" "$LIB" $SPIKE_LINK $BLAS -fopenmp       2>"$WORK/$base.build"
   fi
 
   if [ ! -x "$bin" ]; then

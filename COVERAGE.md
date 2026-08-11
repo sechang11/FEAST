@@ -13,7 +13,7 @@ python tools/coverage_report.py --markdown
 | Entry points declared in FEAST's headers | 202 |
 | Buildable and exercised (OpenBLAS + MKL + MPI) | **182** |
 | Present in the default OpenBLAS build | **120** |
-| Callable from `feastpy` | **120** (all of them, via `feastpy.raw`) |
+| Callable from `feastpy` | **120** in the default build; **140** with SPIKE |
 | Wrapped ergonomically | 12 |
 
 The 82 declared-but-absent routines are not an oversight — they need components
@@ -115,12 +115,15 @@ commands and findings.
 |---|---|---|
 | MKL 2021.4 | sparse polynomial, PARDISO | working, 26/26 examples |
 | MPI (Intel MPI) | 62 PFEAST routines | working, 35/36 examples |
-| SPIKE | 20 banded routines | **blocked: spike-solver.org's downloads 404** |
+| SPIKE | 20 banded routines | **working** — 36/36 examples pass |
 
 ## Not reachable, and why
 
-**Banded (20 routines).** Every download on spike-solver.org returns 404, and no
-source is published, so the package cannot be obtained. `dzfeast_banded.f90`
+**Banded (20 routines) -- now available.** `build/build-spike.sh` fetches and
+builds SPIKE, and with it every one of FEAST's 36 examples passes. The download
+link is not on SPIKE's download page (all six links there are dead); the working
+URL is hidden in the site's thanks page:
+`http://www.spike-solver.org/spike-1.0.tar.gz`. `dzfeast_banded.f90`
 calls into SPIKE
 (`spikeinit_`, `?spike_gbtr?_`, `?gbmm_`), which upstream does not bundle —
 it is a separate download from spike-solver.org. The objects are in
