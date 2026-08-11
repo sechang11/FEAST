@@ -34,9 +34,21 @@ import feastpy                      # noqa: E402
 from feastpy import matrixio        # noqa: E402
 
 # ---- free-tier limits -------------------------------------------------------
-MAX_DENSE_N = 500          # a dense 500x500 solve is ~seconds
-MAX_SPARSE_N = 20_000
-MAX_NNZ = 400_000
+# Measured on the reference build (OpenBLAS, iterative inner solver), sizing M0
+# from the estimator as the UI does:
+#
+#   sparse n=1,000   ~1.8 s      dense n=100   ~1.7 s
+#   sparse n=5,000   >30 s       dense n=300   ~9.2 s
+#   sparse n=20,000  >30 s       dense n=500   ~5.3 s
+#
+# The old ceilings (dense 500, sparse 20,000) were advertised but unreachable
+# inside the time limit: a user picked an allowed size and got a timeout. Cost
+# tracks how many eigenvalues are in the interval as much as the matrix size,
+# so no size cap can guarantee completion -- the timeout is the real guard and
+# these keep the common case inside it.
+MAX_DENSE_N = 500
+MAX_SPARSE_N = 5_000
+MAX_NNZ = 200_000
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 MAX_M0 = 300
 SOLVE_TIMEOUT_S = 30
@@ -48,6 +60,16 @@ SOLVE_TIMEOUT_S = 30
 RATE_LIMIT_REQUESTS = int(os.environ.get("FEAST_RATE_LIMIT", "20"))
 RATE_LIMIT_WINDOW_S = 60
 MAX_CONCURRENT_SOLVES = int(os.environ.get("FEAST_MAX_CONCURRENT", "4"))
+
+# FEAST is OpenMP-parallel and will take every core it can see. On a server
+# that is the wrong default: one visitor's solve would starve everyone else's,
+# and MAX_CONCURRENT_SOLVES would oversubscribe the machine several times over.
+# Give each solve a slice instead. Children inherit this.
+_threads = os.environ.get("FEAST_SOLVE_THREADS")
+if not _threads:
+    _cpus = os.cpu_count() or 4
+    _threads = str(max(1, _cpus // max(1, MAX_CONCURRENT_SOLVES)))
+os.environ.setdefault("OMP_NUM_THREADS", _threads)
 
 _solve_slots = threading.BoundedSemaphore(MAX_CONCURRENT_SOLVES)
 _hits: dict[str, deque] = defaultdict(deque)
@@ -263,7 +285,9 @@ def api_solve(req: SolveRequest, request: Request):
 
 @app.get("/api/limits")
 def api_limits():
-    return {"max_dense_n": MAX_DENSE_N, "max_sparse_n": MAX_SPARSE_N,
+    return {"threads_per_solve": int(os.environ.get("OMP_NUM_THREADS", "1")),
+            "concurrent_solves": MAX_CONCURRENT_SOLVES,
+            "max_dense_n": MAX_DENSE_N, "max_sparse_n": MAX_SPARSE_N,
             "max_nnz": MAX_NNZ, "max_m0": MAX_M0,
             "timeout_s": SOLVE_TIMEOUT_S,
             "max_upload_mb": MAX_UPLOAD_BYTES // (1024 * 1024)}

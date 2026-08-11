@@ -111,13 +111,19 @@ All three are self-contained: unzip and run. No Python, no compilers, nothing.
 
 ### The library, by family
 
-| Family | Windows | Linux | Mac | Why |
-|---|---|---|---|---|
-| Dense | ✅ | ✅ | ✅ | Works everywhere |
-| Sparse (iterative) | ✅ | ✅ | ✅ | Works everywhere |
-| Sparse polynomial | ✅ | ✅ | ✅ | Works everywhere using FEAST's *iterative* routine. Only the shipped **example** needs MKL, because it calls the direct one. |
-| Banded | ❌ | ❌ | ❌ | Needs SPIKE, which nobody can download — **including on Linux**. Not a platform problem. |
-| PFEAST (clusters) | ⚠️ | ✅ | ⚠️ | Needs MPI, which exists on all three. Only built and tested on Linux so far — effort, not a limit. Not a desktop feature anyway. |
+| Family | Windows | Linux | Mac | **Web** | Why |
+|---|---|---|---|---|---|
+| Dense | ✅ | ✅ | ✅ | ✅ to 500×500 | Works everywhere |
+| Sparse (iterative) | ✅ | ✅ | ✅ | ✅ to 5,000 | Works everywhere |
+| Sparse polynomial | ✅ | ✅ | ✅ | ❌ | Works everywhere via the *iterative* routine. The calculator's page just doesn't offer it yet — the backend could. |
+| Banded | ✅ | ✅ | untested | ❌ | Needs SPIKE. **We have it now**; the calculator page doesn't offer it. |
+| Non-Hermitian (complex discs) | ✅ | ✅ | untested | ❌ | `feastpy` does it. The calculator is interval-only, and complex spectra need a 2-D picture. |
+| PFEAST (clusters) | builds, crashes | ✅ | untested | ❌ | For clusters. Meaningless in a browser. |
+
+**The web column is a UI limit, not a capability limit.** The calculator calls
+the same `feastpy` as the app, so anything the app can do the backend can do —
+those pages simply haven't been built. The only real web-specific limits are
+size and time, below.
 
 **Why Linux looks ahead — and mostly isn't.** There is nothing Windows or macOS
 cannot do here. The differences are:
@@ -136,6 +142,54 @@ cannot do here. The differences are:
 **Nothing important is missing on any platform.** The single real gap is banded
 matrices, and that is missing *everywhere*, Linux included, because the SPIKE
 package cannot be downloaded by anyone.
+
+### What the web calculator costs to run
+
+Measured on this machine (28 cores, OpenBLAS, no MKL), sizing the subspace from
+the estimator exactly as the page does:
+
+| Problem | Time |
+|---|---|
+| sparse, n=1,000 | **1.8 s** |
+| sparse, n=5,000 | over 30 s — times out |
+| dense, n=100 | 1.7 s |
+| dense, n=300 | 9.2 s |
+| "how many are in here?" (any size) | 0.05–3.4 s |
+
+Under load, with four solves allowed at once:
+
+| Simultaneous users | All served in | Throughput |
+|---|---|---|
+| 1 | 1.7 s | 0.6 solves/s |
+| 4 | 1.9 s | 2.1 solves/s |
+| 8 | 3.6 s | 2.2 solves/s |
+
+**So: no, it will not eat your server.** About two solves a second sustained,
+and eight people clicking at once are all served within four seconds. For a
+low-traffic specialist site that is far more headroom than you need — a modest
+$10/month box would cope, and the rate limit (20 requests/minute per visitor)
+plus the 30-second timeout stop anyone monopolising it.
+
+Two things make that true, and both were set deliberately:
+
+- **Each solve gets a slice of the machine, not all of it.** FEAST is
+  OpenMP-parallel and will grab every core it can see. On a server that means
+  one visitor starves everyone else, so each solve is capped to
+  cores ÷ concurrent-solves.
+- **Only four solves run at once**; the rest queue. That is why 8 users take
+  3.6 s rather than falling over.
+
+The caps were also *wrong* until this measurement: the page advertised sparse up
+to 20,000, which cannot finish inside the 30-second limit. A user would pick an
+allowed size and get a timeout. Sparse is now capped at 5,000. Cost depends
+mostly on **how many eigenvalues are in your interval**, not on how big the
+matrix is, so no size cap can guarantee completion — the timeout is the real
+guard.
+
+Running the server against MKL would raise these ceilings a lot, because it
+unlocks the direct PARDISO solver instead of the iterative one. That is not yet
+verified: the server's numpy is itself linked against a newer MKL, and two MKL
+versions cannot coexist in one process, so it needs a dedicated environment.
 
 ### Why these aren't tested automatically
 
