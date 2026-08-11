@@ -51,3 +51,7 @@ selftest.txt
 # Licence signing key -- must never be committed or shipped
 licensing/private_key.txt
 licensing/issued.csv
+
+# SPIKE is fetched on demand by build/build-spike.sh, not vendored:
+# it is a separate package with its own licence.
+build/spike/
