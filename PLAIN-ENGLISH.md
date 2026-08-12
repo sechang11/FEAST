@@ -254,6 +254,29 @@ there's one implementation to keep correct, not three.
    (`-fallow-argument-mismatch`), and nothing in the docs says so.
 10. Current Intel MKL no longer has functions FEAST calls, so `MKL=yes` fails
     to link against anything recent.
+11. **A real bug in `include/feast_tools.h`.** Four routines are declared with
+    seven arguments where the Fortran defines eight — the `fpm18` ellipse-ratio
+    argument is missing from `zfeast_gcontour`, `cfeast_gcontour`,
+    `zfeast_grational` and `cfeast_grational`:
+
+    ```
+    header:  zfeast_gcontour_(Emid, r, fpm2, fpm17,        fpm19, Zne, Wne)
+    Fortran: zfeast_gcontour (Emid, r, fpm8, fpm17, fpm18, fpm19, Zne, Wne)
+    ```
+
+    Everything after `fpm17` shifts by one, so a C caller has the rotation angle
+    read out of the ellipse-ratio slot, a pointer read as the rotation angle,
+    and the two output pointers read from past the end of the arguments actually
+    supplied — FEAST then writes the contour through whatever those bytes hold.
+    That is memory corruption, not a wrong number. The Fortran side is correct:
+    called properly, a radius-1 circle puts every node at distance exactly
+    1.000000. Fortran users are unaffected; C users of these four are not.
+12. **`fpm(17)` is undocumented but still required.** Table 1 of the guide jumps
+    from `i=16` to `i=18`, and `feast_tools.f90` comments that `fpm(17)` is
+    "deprecated in v4.0" — yet it remains a mandatory argument of the contour
+    and rational-filter utilities, where it selects the integration rule for the
+    non-Hermitian contour. Callers have to know to pass `fpm(16)`'s value into a
+    slot the manual never mentions.
 
 ---
 
