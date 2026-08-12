@@ -630,3 +630,126 @@ def eigsh_interval(
         all_residuals=res.copy(),
         fpm=fpm.copy(),
     )
+
+
+def eig_polynomial(
+    matrices,
+    center: complex,
+    radius: float,
+    *,
+    m0: Optional[int] = None,
+    contour_points: Optional[int] = None,
+    tol_exponent: Optional[int] = None,
+    max_loops: Optional[int] = None,
+    ratio: Optional[int] = None,
+    uplo: str = "F",
+    iterative: bool = True,
+    verbose: bool = False,
+) -> FeastResult:
+    """Eigenvalues of a polynomial eigenvalue problem inside a disc.
+
+        (A0 + lambda A1 + lambda^2 A2 + ... + lambda^p Ap) x = 0
+
+    Pass the coefficient matrices in ascending order of power, so
+    `matrices[i]` multiplies lambda**i. Two matrices is a linear problem, three
+    is quadratic (the usual case -- damped vibration, where the damping term
+    makes lambda appear squared).
+
+    FEAST solves this directly, without linearising into a 2N-sized problem
+    first, which is the usual approach elsewhere and doubles the dimension.
+
+    The eigenvalues are complex even when every coefficient matrix is real, so
+    the search region is always a disc -- there is no interval form.
+    """
+    import scipy.sparse as sp
+
+    mats = [sp.csr_matrix(M) for M in matrices]
+    if len(mats) < 2:
+        raise ValueError("a polynomial problem needs at least two coefficient "
+                         f"matrices (A0 and A1); got {len(mats)}")
+    n = mats[0].shape[0]
+    for i, M in enumerate(mats):
+        if M.shape != (n, n):
+            raise ValueError(f"A{i} has shape {M.shape}, expected ({n}, {n})")
+    degree = len(mats) - 1
+
+    if any(np.iscomplexobj(M.data) for M in mats):
+        raise NotImplementedError(
+            "complex polynomial problems are not wrapped yet; FEAST provides "
+            "zfeast_scsrpev / zifeast_scsrpev for them")
+
+    uplo = uplo.upper()
+    if uplo not in ("U", "L", "F"):
+        raise ValueError(f"uplo must be 'U', 'L' or 'F', got {uplo!r}")
+    mats = [_as_uplo(M, uplo) for M in mats]
+    for M in mats:
+        M.sort_indices()
+
+    # FEAST takes the coefficients as columns of one Fortran array, so every
+    # matrix must occupy the same stride even though they have different
+    # numbers of non-zeros. The row pointers say where each one really ends,
+    # so the padding is never read.
+    nnz = max(M.nnz for M in mats)
+    sa = np.zeros((nnz, degree + 1), dtype=np.float64, order="F")
+    jsa = np.zeros((nnz, degree + 1), dtype=np.int32, order="F")
+    isa = np.zeros((n + 1, degree + 1), dtype=np.int32, order="F")
+    for k, M in enumerate(mats):
+        sa[:M.nnz, k] = M.data
+        jsa[:M.nnz, k] = M.indices + 1          # Fortran is 1-based
+        isa[:, k] = M.indptr + 1
+
+    if m0 is None:
+        m0 = min(n, max(10, n // 4))
+    m0 = int(min(m0, n))
+
+    fpm = _make_fpm(contour_points, tol_exponent, max_loops, verbose,
+                    ratio=ratio)
+
+    # Eigenvalues and eigenvectors are complex. Allocate the two-sided width:
+    # the general interfaces may return left vectors alongside right ones, and
+    # a short buffer here is a heap overwrite rather than an error.
+    lam = np.zeros(m0, dtype=np.complex128)
+    q = np.zeros((n, 2 * m0), dtype=np.complex128, order="F")
+    res = np.zeros(2 * m0, dtype=np.float64)
+
+    epsout, loop, mode, info = _d(0.0), _i(0), _i(0), _i(0)
+    n_c, m0_c, d_c = _i(n), _i(m0), _i(degree)
+    emid = np.array([complex(center).real, complex(center).imag],
+                    dtype=np.float64)
+    r_c = _d(float(radius))
+    uplo_c = ctypes.c_char(uplo.encode()[:1])
+
+    # The direct routine needs MKL-PARDISO; without it FEAST's own polynomial
+    # examples stop at info=2. The iterative twin is the portable path.
+    name = "difeast_scsrpev" if iterative else "dfeast_scsrpev"
+    fn = _lib.sym(name)
+
+    fn(ctypes.byref(uplo_c), ctypes.byref(d_c), ctypes.byref(n_c),
+       sa.ctypes.data_as(ctypes.c_void_p),
+       isa.ctypes.data_as(ctypes.POINTER(_i)),
+       jsa.ctypes.data_as(ctypes.POINTER(_i)),
+       fpm.ctypes.data_as(ctypes.POINTER(_i)),
+       ctypes.byref(epsout), ctypes.byref(loop),
+       emid.ctypes.data_as(ctypes.c_void_p), ctypes.byref(r_c),
+       ctypes.byref(m0_c),
+       lam.ctypes.data_as(ctypes.c_void_p),
+       q.ctypes.data_as(ctypes.c_void_p),
+       ctypes.byref(mode),
+       res.ctypes.data_as(ctypes.c_void_p),
+       ctypes.byref(info))
+
+    m = max(0, mode.value)
+    return FeastResult(
+        eigenvalues=lam[:m].copy(),
+        eigenvectors=q[:, :m].copy(),
+        residuals=res[:m].copy(),
+        n_found=m,
+        loops=loop.value,
+        epsout=epsout.value,
+        info=info.value,
+        subspace_used=m0,
+        routine=name,
+        all_eigenvalues=lam.copy(),
+        all_residuals=res[:m0].copy(),
+        fpm=fpm.copy(),
+    )

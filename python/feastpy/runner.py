@@ -53,6 +53,10 @@ def solve_blocking(A, B, params: dict):
     from . import solver
 
     t0 = time.perf_counter()
+    # A list of matrices means a polynomial problem: A0 + lambda A1 + ...
+    if isinstance(A, (list, tuple)):
+        r = solver.eig_polynomial(A, **params)
+        return r, time.perf_counter() - t0
     if "center" in params:
         r = solver.eig_disc(A, B=B, **params)
     else:

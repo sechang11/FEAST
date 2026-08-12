@@ -86,6 +86,17 @@ class Problem:
     emid: Optional[complex] = None
     radius: Optional[float] = None
     programs: tuple = ()
+    # Coefficient matrices A0..Ap for a polynomial problem, lowest power
+    # first. Empty for the ordinary linear problems.
+    poly_files: tuple = ()
+    # fpm(18): the contour's vertical/horizontal ratio, x100. Only set where
+    # the problem genuinely needs a non-default shape -- system5's eigenvalues
+    # sit in a flat cluster, and its own example uses a ratio of 7.
+    ratio: Optional[int] = None
+    # fpm(3): stopping tolerance as 10^-n, where the default 12 is unreachable.
+    tol_exponent: Optional[int] = None
+    contour_points: Optional[int] = None
+    max_loops: Optional[int] = None
     note: str = ""
     # Measured on an MKL-free build (BiCGStab inner solver, no PARDISO), which
     # is what we ship on all three platforms. Empty means it solves cleanly at
@@ -103,7 +114,13 @@ class Problem:
         return self.symmetry in (HERMITIAN, COMPLEX_SYM)
 
     @property
+    def polynomial(self) -> bool:
+        return bool(self.poly_files)
+
+    @property
     def solver(self) -> Optional[str]:
+        if self.polynomial:
+            return "eig_polynomial"
         return SOLVABLE.get(self.symmetry)
 
     @property
@@ -265,13 +282,24 @@ _EXAMPLE_ONLY = [
     Problem(
         id="system5", title="system5 - polynomial (quadratic)",
         group="Example programs", symmetry=REAL_SYM, kind="standard",
-        geometry=DISC, uplo="F", emid=complex(-1.55, 0.0), radius=0.05, m0=20,
+        geometry=DISC, uplo="F", emid=complex(-1.55, 0.0), radius=0.05, m0=100,
         n=1000, nnz=2998, a_file=_x("system5A0.mtx"),
-        about="A quadratic eigenvalue problem: (A0 + lambda A1 + lambda^2 A2) x "
-              "= 0. Arises with damping, where the eigenvalue appears squared.",
+        ratio=7, tol_exponent=6, contour_points=32, max_loops=100,
+        poly_files=(_x("system5A0.mtx"), _x("system5A1.mtx"),
+                    _x("system5A2.mtx")),
+        about="A quadratic eigenvalue problem: (A0 + lambda A1 + lambda^2 A2) "
+              "x = 0. This is what damping does -- the eigenvalue appears "
+              "squared, so the problem is no longer linear in lambda. FEAST "
+              "solves it directly, without first linearising into a problem of "
+              "twice the size.",
         programs=("F90sparse_dfeast_scsrpev.f90", "Csparse_dfeast_scsrpev.c"),
-        note="Needs all three of system5A0/A1/A2. Not solvable from the GUI "
-             "yet -- feastpy has no polynomial entry point."),
+        note="Needs all three matrices. Its 20 eigenvalues sit in a tight "
+             "cluster around -1.5738, hence the small radius and the very flat "
+             "contour (ratio 7) the example uses.",
+        caveat="Converges slowly without MKL: 89 loops and about 15 seconds to "
+               "reach a residual of 9.4e-07, so it is set up for 1e-6 rather "
+               "than the usual 1e-12. M0 is the lever -- at M0=60 the residual "
+               "stalls at 5.6e-04 no matter how many loops it is given."),
 ]
 
 ALL: tuple = tuple(_DATA_PROBLEMS + _EXAMPLE_ONLY)
@@ -296,6 +324,8 @@ def groups() -> dict:
 
 def available(p: Problem) -> bool:
     """Is the matrix data actually on disk? Absent for a source-only checkout."""
+    if p.polynomial:
+        return all(Path(f).is_file() for f in p.poly_files)
     if not p.a_file or not Path(p.a_file).is_file():
         return False
     return not (p.b_file and not Path(p.b_file).is_file())
@@ -354,6 +384,10 @@ def load(p: Problem):
             if M.imag.count_nonzero() == 0:
                 M = M.real.astype(np.float64)
         return M
+
+    if p.polynomial:
+        # A list of coefficient matrices, lowest power first; there is no B.
+        return [_load(f) for f in p.poly_files], None
 
     A = _load(p.a_file)
     B = _load(p.b_file) if p.b_file else None

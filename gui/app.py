@@ -406,6 +406,10 @@ class MainWindow(QMainWindow):
         # non-Hermitian one scatters them across the complex plane and needs a
         # disc. This is a property of the matrix, not a user preference.
         self._geometry = problems.INTERVAL
+        # Coefficient matrices A0..Ap when a polynomial problem is
+        # loaded; None for the ordinary linear ones.
+        self.poly_matrices = None
+        self._ratio = None
         self._centre = complex(0.0, 0.0)
         self._radius = 1.0
         self.bounds = None
@@ -958,16 +962,14 @@ class MainWindow(QMainWindow):
                 # Both search geometries work now. The polynomial problem is
                 # the only one still out of reach: it needs three matrices and
                 # a routine family feastpy has no entry point for.
-                ok = p.solver is not None and p.id != "system5"
+                ok = p.solver is not None
                 label = f"{p.title}  (n={p.n:,})"
                 combo.addItem(label, ("problem", p.id))
                 if not ok:
                     it = combo.model().item(combo.count() - 1)
                     it.setEnabled(False)
-                    it.setToolTip(
-                        "A polynomial eigenvalue problem: it needs three "
-                        "matrices (A0, A1, A2) and a routine family feastpy "
-                        "does not wrap yet.")
+                    it.setToolTip("The matrix data for this problem is not "
+                                  "present in this build.")
 
         header("Generated")
         for name in matrixio.DEMOS:
@@ -1001,6 +1003,8 @@ class MainWindow(QMainWindow):
             return
         self.problem_note.setText("")
         self._uplo = "F"
+        self.poly_matrices = None
+        self._ratio = None
         self._set_geometry(problems.INTERVAL)
         build, emin, emax = matrixio.DEMOS[name]
         built = build()
@@ -1035,7 +1039,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Could not load", str(exc))
             return
 
-        self.matrix, self.b_matrix = A, None
+        if p.polynomial:
+            # A is the list of coefficient matrices. Show A0 in the Matrix tab
+            # -- it is the one with the problem's structure -- and keep the set
+            # for the solve.
+            self.poly_matrices = A
+            self.matrix, self.b_matrix = A[0], None
+        else:
+            self.poly_matrices = None
+            self.matrix, self.b_matrix = A, None
         self.matrix_path, self.b_path = p.a_file, p.b_file
         self.clear_b_btn.setEnabled(False)
         self.b_label.setText("no B - standard problem A x = λ x")
@@ -1047,15 +1059,29 @@ class MainWindow(QMainWindow):
         # The .in file's UPLO describes the file; what matters is the array we
         # actually hold, which differs for the one problem carrying a Matrix
         # Market banner (scipy mirrors it).
-        self._uplo = problems.effective_uplo(A, p.uplo)
+        self._uplo = ("F" if p.polynomial
+                      else problems.effective_uplo(A, p.uplo))
         if p.geometry == problems.DISC:
             self._set_geometry(problems.DISC, p.emid, p.radius)
         else:
             self._set_geometry(problems.INTERVAL)
             self.emin.setValue(p.emin)
             self.emax.setValue(p.emax)
-        self.m0.setValue(min(p.m0, A.shape[0]))
-        self.matrix_label.setText(matrixio.describe(A))
+        self.m0.setValue(min(p.m0, (A[0] if p.polynomial else A).shape[0]))
+        # Some problems only work at settings their own example uses -- a very
+        # flat contour, a looser tolerance. Apply them rather than letting the
+        # defaults quietly find nothing.
+        self._ratio = p.ratio
+        if p.contour_points:
+            self.contour.setValue(p.contour_points)
+        if p.tol_exponent:
+            self.tol.setValue(p.tol_exponent)
+        if p.max_loops:
+            self.loops.setValue(p.max_loops)
+        self.matrix_label.setText(
+            matrixio.describe(A[0] if p.polynomial else A)
+            + (f"  (+{len(A) - 1} more coefficient matrices)"
+               if p.polynomial else ""))
 
         note = p.about
         if p.note:
@@ -1066,8 +1092,13 @@ class MainWindow(QMainWindow):
 
         self._update_spectrum_view()
         self._refresh_matrix_view(p.title)
-        self._log(f"loaded {p.title}: n={A.shape[0]}, search {p.search_text}, "
-                  f"M0={p.m0}, uplo={self._uplo}")
+        if p.polynomial:
+            self._log(f"loaded {p.title}: degree {len(A) - 1} polynomial, "
+                      f"n={A[0].shape[0]}, {len(A)} coefficient matrices, "
+                      f"search {p.search_text}, M0={p.m0}")
+        else:
+            self._log(f"loaded {p.title}: n={A.shape[0]}, search {p.search_text}, "
+                      f"M0={p.m0}, uplo={self._uplo}")
         if p.caveat:
             self._log("note: " + p.caveat)
 
@@ -1359,6 +1390,7 @@ class MainWindow(QMainWindow):
         # Read the storage off the data rather than assuming. FEAST's own
         # sample files are a mix: some ship both triangles, some only the
         # lower one, and only bcsstk11 carries a banner saying so.
+        self.poly_matrices = None
         self._uplo = problems.effective_uplo(M, "F") if sp.issparse(M) else "F"
         self.matrix_label.setText(matrixio.describe(M))
         self._update_spectrum_view()
@@ -1407,7 +1439,18 @@ class MainWindow(QMainWindow):
             # discards half the matrix, so it is threaded explicitly.
             uplo=getattr(self, "_uplo", "F"),
         )
-        if self._geometry == problems.DISC:
+        if self.poly_matrices is not None:
+            # eig_polynomial has no 'rule' or 'uplo="U"' path and takes the
+            # matrices positionally through the runner.
+            params.pop("uplo", None)
+            params["uplo"] = "F"
+            self._centre = complex(self.emid_re.value(), self.emid_im.value())
+            self._radius = self.radius.value()
+            params["center"] = self._centre
+            params["radius"] = self._radius
+            if self._ratio:
+                params["ratio"] = self._ratio
+        elif self._geometry == problems.DISC:
             self._centre = complex(self.emid_re.value(), self.emid_im.value())
             self._radius = self.radius.value()
             params["center"] = self._centre
@@ -1427,7 +1470,11 @@ class MainWindow(QMainWindow):
         self._set_solving(True)
         self.statusBar().showMessage("solving...")
 
-        self.worker = SolveWorker(self.matrix, self.b_matrix, params)
+        # A polynomial problem is defined by all its coefficient matrices, not
+        # by A0 alone -- self.matrix holds A0 only so the Matrix tab has
+        # something to show.
+        operand = self.poly_matrices if self.poly_matrices is not None else self.matrix
+        self.worker = SolveWorker(operand, self.b_matrix, params)
         self.worker.finished_ok.connect(self.on_solved)
         self.worker.failed.connect(self.on_failed)
         self.worker.cancelled.connect(self.on_cancelled)
