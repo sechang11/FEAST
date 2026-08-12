@@ -54,6 +54,39 @@ def _header_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent / "4.0" / "include"
 
 
+# Routines whose C header declaration disagrees with the Fortran that actually
+# runs. FEAST 4.0's include/feast_tools.h omits the fpm18 argument (the ellipse
+# ratio) from four of the non-Hermitian contour utilities, declaring seven
+# arguments where src/kernel/feast_tools.f90 defines eight:
+#
+#   header:  zfeast_gcontour_(Emid, r, fpm2, fpm17,        fpm19, Zne, Wne)
+#   Fortran: zfeast_gcontour (Emid, r, fpm8, fpm17, fpm18, fpm19, Zne, Wne)
+#
+# Calling these as declared shifts every argument after fpm17 by one, so the
+# rotation angle is read from the ellipse-ratio slot, an *address* is read as
+# the rotation angle, and the Zne/Wne output pointers are read from past the
+# end of the supplied arguments -- writes to whatever those bytes happen to be.
+# That is memory corruption, not merely a wrong answer, and it affects any C
+# caller. Verified against the Fortran source and by calling both forms; with
+# the eight-argument form a radius-1 circular contour puts every node at
+# distance 1.000000 from the centre, and fpm18=30 correctly flattens it.
+#
+# Reported upstream (see PLAIN-ENGLISH.md). Corrected here so the shipped
+# library stays usable; the fix is to the *declaration*, not to FEAST.
+_HEADER_CORRECTIONS: dict[str, list[tuple[str, str]]] = {
+    name: [(t, "Emid"), (t, "r"), ("int", "fpm8"), ("int", "fpm17"),
+           ("int", "fpm18"), ("int", "fpm19")] + tail
+    for name, t, tail in (
+        ("zfeast_gcontour",  "double", [("double", "Zne"), ("double", "Wne")]),
+        ("cfeast_gcontour",  "float",  [("float",  "Zne"), ("float",  "Wne")]),
+        ("zfeast_grational", "double", [("double", "Eig"), ("int", "M0"),
+                                        ("double", "f")]),
+        ("cfeast_grational", "float",  [("float",  "Eig"), ("int", "M0"),
+                                        ("float",  "f")]),
+    )
+}
+
+
 @lru_cache(maxsize=1)
 def signatures() -> dict[str, list[tuple[str, str]]]:
     """{routine: [(ctype, argument name), ...]} parsed from the headers."""
@@ -74,6 +107,7 @@ def signatures() -> dict[str, list[tuple[str, str]]]:
                 args.append((m.group(1), m.group(2)))
             if ok and name not in out:
                 out[name] = args
+    out.update(_HEADER_CORRECTIONS)
     return out
 
 

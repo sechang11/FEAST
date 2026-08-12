@@ -354,5 +354,83 @@ too_small = feastpy.eigh_interval(laplacian(), 0.0, 0.05, m0=2)
 results.append(check("undersized m0 reports info=3", too_small.info == 3,
                      f"info={too_small.info} ({too_small.message})"))
 
+# --- contour and filter utilities --------------------------------------------
+# These drive the visualiser, and they are the routines whose C header
+# declaration is wrong upstream (see _HEADER_CORRECTIONS in raw.py). Assert the
+# corrected declaration, then assert the geometry it produces -- a wrong
+# argument order still "runs", so only the numbers prove the fix.
+print("\ncontour and filter utilities:")
+_names = [a for _, a in raw.signature("zfeast_gcontour")]
+results.append(check("gcontour declaration includes fpm18",
+                     _names == ["Emid", "r", "fpm8", "fpm17", "fpm18", "fpm19",
+                                "Zne", "Wne"], " ".join(_names)))
+
+
+def _gcontour(n=16, itype=0, ratio=100, rot=0, emid=1 + 2j, radius=1.0):
+    Zne = np.zeros(n, dtype=np.complex128)
+    Wne = np.zeros(n, dtype=np.complex128)
+    raw.call("zfeast_gcontour",
+             Emid=np.array([emid.real, emid.imag], dtype=np.float64),
+             r=radius, fpm8=n, fpm17=itype, fpm18=ratio, fpm19=rot,
+             Zne=Zne, Wne=Wne)
+    return Zne, Wne
+
+
+_Z, _ = _gcontour(ratio=100)
+_d = np.abs(_Z - (1 + 2j))
+results.append(check("circular contour puts every node on the circle",
+                     np.allclose(_d, 1.0, atol=1e-12),
+                     f"radius in [{_d.min():.6f}, {_d.max():.6f}]"))
+
+_Zf, _ = _gcontour(ratio=30)
+_aspect = _Zf.imag.ptp() / _Zf.real.ptp()
+results.append(check("fpm18 flattens the ellipse", 0.25 < _aspect < 0.32,
+                     f"height/width={_aspect:.3f} for ratio=30"))
+
+_Zr, _ = _gcontour(ratio=30, rot=45)
+results.append(check("fpm19 rotates the ellipse",
+                     abs(_Zr.real.ptp() - _Zr.imag.ptp()) < 1e-9,
+                     f"45deg makes the box square: {_Zr.real.ptp():.3f}"))
+
+# The Hermitian half-contour, one per quadrature rule.
+_nodes = {}
+for _t, _label in ((0, "Gauss"), (1, "Trapezoidal"), (2, "Zolotarev")):
+    _Zh = np.zeros(8, dtype=np.complex128)
+    _Wh = np.zeros(8, dtype=np.complex128)
+    raw.call("zfeast_contour", Emin=0.0, Emax=1.0, fpm2=8, fpm16=_t,
+             fpm18=30, Zne=_Zh, Wne=_Wh)
+    _nodes[_label] = _Zh
+results.append(check("three quadrature rules give three different contours",
+                     not np.allclose(_nodes["Gauss"], _nodes["Trapezoidal"])
+                     and not np.allclose(_nodes["Gauss"], _nodes["Zolotarev"]),
+                     ", ".join(_nodes)))
+results.append(check("half-contour nodes sit above the real axis",
+                     all((z.imag >= -1e-12).all() for z in _nodes.values())))
+
+# The rational filter: ~1 inside the search interval, ~0 outside, and sharper
+# with more contour points. This is the curve the Filter tab draws.
+_E = np.linspace(-1.0, 2.0, 61)
+_sel = {}
+for _np_ in (4, 8, 16):
+    _f = np.zeros(len(_E))
+    raw.call("dfeast_rational", Emin=0.0, Emax=1.0, fpm2=_np_, fpm16=0,
+             fpm18=100, Eig=_E.copy(), M0=len(_E), f=_f)
+    _in = np.abs(_f[(_E > 0.05) & (_E < 0.95)]).min()
+    _out = np.abs(_f[(_E < -0.25) | (_E > 1.25)]).max()
+    _sel[_np_] = _in / _out
+results.append(check("rational filter passes the interval and blocks outside",
+                     _sel[8] > 1e3, f"selectivity at 8 points = {_sel[8]:.1e}"))
+results.append(check("more contour points sharpen the filter",
+                     _sel[4] < _sel[8] < _sel[16],
+                     " < ".join(f"{_sel[k]:.1e}" for k in (4, 8, 16))))
+
+_fc = np.zeros(4, dtype=np.complex128)
+_pts = np.array([1 + 2j, 1.5 + 2j, 3 + 2j, 1 + 5j], dtype=np.complex128)
+raw.call("zfeast_grational", Emid=np.array([1.0, 2.0]), r=1.0, fpm8=16,
+         fpm17=0, fpm18=100, fpm19=0, Eig=_pts.copy(), M0=4, f=_fc)
+results.append(check("complex filter is 1 inside the disc and small outside",
+                     abs(abs(_fc[0]) - 1) < 1e-6 and abs(_fc[2]) < 1e-3,
+                     f"centre={abs(_fc[0]):.6f}, outside={abs(_fc[2]):.2e}"))
+
 print(f"\n{sum(results)}/{len(results)} passed")
 raise SystemExit(0 if all(results) else 1)
