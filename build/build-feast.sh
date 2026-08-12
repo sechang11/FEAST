@@ -138,7 +138,10 @@ if [ -n "$SPIKE_ARG" ] && [ -z "${SPIKE_LIBS:-}" ]; then
     [ -n "${SPIKE_LIBS:-}" ] || { echo "  !! --spike given but no libspike.a found;" >&2
                                   echo "     run build/build-spike.sh first" >&2; exit 1; }
   elif [ -d "$SPIKE_ARG" ]; then
-    SPIKE_LIBS="-L$SPIKE_ARG -lspike"
+    # Absolutise. The link runs from a different directory than the caller, so
+    # a relative -L silently resolves to nothing and ld reports the path as a
+    # missing input file rather than as a bad search directory.
+    SPIKE_LIBS="-L$(cd "$SPIKE_ARG" && pwd) -lspike"
   else
     SPIKE_LIBS="$SPIKE_ARG"
   fi

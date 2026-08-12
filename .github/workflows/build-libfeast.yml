@@ -97,8 +97,12 @@ jobs:
       - name: Build + test library (Unix)
         if: runner.os != 'Windows'
         run: |
+          # if/fi, not `[ -f ] && VAR=...`: steps run under `bash -e`, so a
+          # false test as the last command of a line aborts the whole step.
           SPIKE=""
-          [ -f 4.0/lib/${{ matrix.arch }}/libspike.a ] && SPIKE="--spike 4.0/lib/${{ matrix.arch }}"
+          if [ -f 4.0/lib/${{ matrix.arch }}/libspike.a ]; then
+            SPIKE="--spike"
+          fi
           bash build/build-feast.sh --arch ${{ matrix.arch }} $SPIKE
           bash build/run-test.sh ${{ matrix.arch }}
 
@@ -106,8 +110,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
+          # if/fi, not `[ -f ] && VAR=...`: steps run under `bash -e`, so a
+          # false test as the last command of a line aborts the whole step.
           SPIKE=""
-          [ -f 4.0/lib/${{ matrix.arch }}/libspike.a ] && SPIKE="--spike 4.0/lib/${{ matrix.arch }}"
+          if [ -f 4.0/lib/${{ matrix.arch }}/libspike.a ]; then
+            SPIKE="--spike"
+          fi
           bash build/build-feast.sh --arch ${{ matrix.arch }} $SPIKE
           bash build/run-test.sh ${{ matrix.arch }}
 
