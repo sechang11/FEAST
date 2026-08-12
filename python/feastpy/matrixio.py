@@ -271,8 +271,12 @@ DEMOS = {
     "2-D Laplacian (30x30 grid, sparse)": (lambda: laplacian_2d(30), 0.0, 0.5),
     "1-D Laplacian (n=300, dense)": (lambda: laplacian_1d(300, sparse=False), 0.0, 0.01),
     "Random symmetric (n=300, dense)": (lambda: random_symmetric(300), -1.0, 1.0),
-    # FEAST's own sample: generalized, and the problem RUNNING-THE-ORIGINAL.md
-    # walks through with the upstream driver.
-    "FEAST sample: system1 (generalized)": (lambda: _feast_sample("system1"), 0.18, 1.0),
-    "FEAST sample: system3 (generalized)": (lambda: _feast_sample("system3"), 0.18, 1.0),
+    # FEAST's own sample problems used to be listed here as interval searches.
+    # They are now in feastpy.problems, which carries each one's real settings
+    # -- its symmetry class, its storage triangle and, crucially, its search
+    # GEOMETRY. system3 is declared general/non-Hermitian by its own .in file
+    # and is searched with a disc centred at 0.59+0.0001i; running it as an
+    # interval on [0.18, 1.0] cannot converge, and returned info=2 with eleven
+    # unconverged values that looked like an answer. The catalogue entry finds
+    # 16 with a residual of 5.7e-14.
 }

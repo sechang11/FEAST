@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 import licensing
 import feastpy
 from feastpy import (algorithms, codegen, contours, diagnostics, matrixio,
-                     problems, results_io, runner)
+                     problems, raw, results_io, runner)
 from views import (ComplexSpectrumView, EigenvectorView, FilterView,
                    MatrixView, SpectrumView)
 
@@ -1792,6 +1792,26 @@ def selftest() -> int:
     say(f"problems: {len(_avail)} of {len(problems.ALL)} built-in problems found"
         + (f" (absent: {', '.join(_missing)})" if _missing else ""))
 
+    # The Filter and contour views go through feastpy.raw, which parses FEAST's
+    # C headers for its signatures. A packaged build that omits those headers
+    # solves perfectly and draws an empty Filter tab -- every other check here
+    # passes, because solver.py binds the library directly. So exercise the raw
+    # path explicitly: it is the only thing that catches a missing header.
+    _filter_ok = False
+    try:
+        from feastpy import contours
+        _E, _f = contours.filter_curve(0.0, 1.0, points=8)
+        _Z, _W = contours.interval_contour(0.0, 1.0, points=8)
+        # The filter overshoots 1 slightly near the interval edges -- that
+        # ripple is inherent to a rational approximation, not an error.
+        _peak = abs(_f).max()
+        _filter_ok = (len(_Z) == 8 and 0.9 < _peak < 1.3
+                      and abs(_f[0]) < 1e-3)
+        say(f"filter  : {len(raw.signatures())} routine signatures, "
+            f"contour {len(_Z)} nodes, filter peak {abs(_f).max():.4f}")
+    except Exception as exc:
+        say(f"filter  : UNAVAILABLE -- {type(exc).__name__}: {exc}")
+
     exact = [2 - 2 * np.cos((k + 1) * np.pi / 201) for k in range(9)]
     ok = {"solved": False}
 
@@ -1821,7 +1841,7 @@ def selftest() -> int:
 
     # A bundle that solves but ships none of its built-in problems is a
     # broken bundle, so it fails the self-test rather than passing quietly.
-    passed = ok["solved"] and len(_avail) >= 10
+    passed = ok["solved"] and len(_avail) >= 10 and _filter_ok
     say("SELFTEST PASS" if passed else "SELFTEST FAIL")
     flush()
     return 0 if passed else 1

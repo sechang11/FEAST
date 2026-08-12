@@ -49,6 +49,17 @@ if OS_TAG == "windows":
 # app is packaged. That includes the 68 MB benzene pair: it compresses well and
 # a scientific application is downloaded once.
 datas = []
+
+# FEAST's C headers. feastpy.raw parses these to learn every routine's
+# signature, so without them raw.call() cannot resolve anything and the Filter
+# and contour views -- which are built on FEAST's own zfeast_contour and
+# dfeast_rational -- fail silently in a packaged build while every other part
+# of the app keeps working, because solver.py binds the library directly and
+# never goes through raw. 130 KB.
+include_dir = ROOT / "4.0" / "include"
+for f in sorted(include_dir.glob("*.h")):
+    datas.append((str(f), "feast_include"))
+
 for src in (ROOT / "4.0" / "utility" / "data",
             # system5's three matrices (the quadratic polynomial problem) live
             # here rather than in utility/data.
