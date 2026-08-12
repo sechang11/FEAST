@@ -147,6 +147,13 @@ jobs:
           echo "FEAST_DLL_DIR=${{ steps.msys2.outputs.msys2-location }}\mingw64\bin" >> $GITHUB_ENV
           echo "FC=${{ steps.msys2.outputs.msys2-location }}\mingw64\bin\gfortran.exe" >> $GITHUB_ENV
 
+      # FEAST's C headers are hand-maintained and nothing upstream checks them
+      # against the Fortran. Four already disagree in argument count, which
+      # corrupts memory for a C caller; this fails only on a NEW one.
+      - name: C headers match the Fortran
+        shell: bash
+        run: python tools/check_headers.py
+
       - name: feastpy binding tests
         shell: bash
         working-directory: python

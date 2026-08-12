@@ -46,20 +46,17 @@ if OS_TAG == "windows":
 
 # FEAST's sample matrices back the built-in problems. Ship all of them, so the
 # catalogue in feastpy/problems.py is not full of entries that vanish once the
-# app is packaged -- except the benzene pair, which is 68 MB of the 102 MB
-# total and is also the one problem that does not converge at its shipped
-# settings without MKL. problems.available() hides what is absent.
+# app is packaged. That includes the 68 MB benzene pair: it compresses well and
+# a scientific application is downloaded once.
 datas = []
-data_dir = ROOT / "4.0" / "utility" / "data"
-skipped_mb = 0.0
-for f in sorted(data_dir.glob("*.mtx")):
-    if f.name.startswith("c6h6"):
-        skipped_mb += f.stat().st_size / 1048576
-        continue
-    datas.append((str(f), "feast_data"))
+for src in (ROOT / "4.0" / "utility" / "data",
+            # system5's three matrices (the quadratic polynomial problem) live
+            # here rather than in utility/data.
+            ROOT / "4.0" / "example" / "FEAST"):
+    for f in sorted(src.glob("*.mtx")):
+        datas.append((str(f), "feast_data"))
 print(f"bundling {len(datas)} sample matrices "
-      f"({sum(Path(d[0]).stat().st_size for d in datas) / 1048576:.0f} MB); "
-      f"skipping benzene ({skipped_mb:.0f} MB)")
+      f"({sum(Path(d[0]).stat().st_size for d in datas) / 1048576:.0f} MB)")
 
 a = Analysis(
     [str(ROOT / "gui" / "app.py")],
