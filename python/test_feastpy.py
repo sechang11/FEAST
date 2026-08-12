@@ -431,14 +431,15 @@ results.append(check("circular contour puts every node on the circle",
                      f"radius in [{_d.min():.6f}, {_d.max():.6f}]"))
 
 _Zf, _ = _gcontour(ratio=30)
-_aspect = _Zf.imag.ptp() / _Zf.real.ptp()
+# np.ptp(x), not x.ptp(): the method was removed in NumPy 2.0.
+_aspect = np.ptp(_Zf.imag) / np.ptp(_Zf.real)
 results.append(check("fpm18 flattens the ellipse", 0.25 < _aspect < 0.32,
                      f"height/width={_aspect:.3f} for ratio=30"))
 
 _Zr, _ = _gcontour(ratio=30, rot=45)
 results.append(check("fpm19 rotates the ellipse",
-                     abs(_Zr.real.ptp() - _Zr.imag.ptp()) < 1e-9,
-                     f"45deg makes the box square: {_Zr.real.ptp():.3f}"))
+                     abs(np.ptp(_Zr.real) - np.ptp(_Zr.imag)) < 1e-9,
+                     f"45deg makes the box square: {np.ptp(_Zr.real):.3f}"))
 
 # The Hermitian half-contour, one per quadrature rule.
 _nodes = {}
