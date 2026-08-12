@@ -27,9 +27,27 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-_ROOT = Path(__file__).resolve().parents[2] / "4.0"
-DATA = _ROOT / "utility" / "data"
-EXAMPLES = _ROOT / "example" / "FEAST"
+import sys
+
+
+def _dirs():
+    """Where the matrices live, in the source tree and in a frozen bundle.
+
+    A packaged app has no source tree above the package, so the copies the
+    PyInstaller spec bundles are checked first. Without this the catalogue
+    resolves to paths that do not exist inside the .exe and every built-in
+    problem silently disappears from the menu.
+    """
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        for cand in (base / "feast_data", base / "4.0" / "utility" / "data"):
+            if cand.is_dir():
+                return cand, cand
+    root = Path(__file__).resolve().parents[2] / "4.0"
+    return root / "utility" / "data", root / "example" / "FEAST"
+
+
+DATA, EXAMPLES = _dirs()
 
 # How the .in file's first three lines map onto what the maths actually is.
 # 's'+'d' real symmetric, 's'+'z' complex symmetric, 'h' Hermitian, 'g' general.

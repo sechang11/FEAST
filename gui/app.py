@@ -1658,6 +1658,14 @@ def selftest() -> int:
     say(f"platform: {sys.platform} frozen={getattr(sys, 'frozen', False)}")
     say(f"library : {feastpy.load()._name}")
     say(f"samples : {matrixio.DATA_DIR}")
+    # The built-in catalogue resolves its matrices by path, and a frozen app
+    # has no source tree -- so this is precisely the thing that breaks on
+    # packaging while every other check still passes. Count what actually
+    # loads, and name what is missing rather than letting it vanish quietly.
+    _avail = [p for p in problems.ALL if problems.available(p)]
+    _missing = [p.id for p in problems.ALL if not problems.available(p)]
+    say(f"problems: {len(_avail)} of {len(problems.ALL)} built-in problems found"
+        + (f" (absent: {', '.join(_missing)})" if _missing else ""))
 
     exact = [2 - 2 * np.cos((k + 1) * np.pi / 201) for k in range(9)]
     ok = {"solved": False}
@@ -1686,9 +1694,12 @@ def selftest() -> int:
     QTimer.singleShot(120_000, app.quit)
     app.exec()
 
-    say("SELFTEST PASS" if ok["solved"] else "SELFTEST FAIL")
+    # A bundle that solves but ships none of its built-in problems is a
+    # broken bundle, so it fails the self-test rather than passing quietly.
+    passed = ok["solved"] and len(_avail) >= 10
+    say("SELFTEST PASS" if passed else "SELFTEST FAIL")
     flush()
-    return 0 if ok["solved"] else 1
+    return 0 if passed else 1
 
 
 def main():

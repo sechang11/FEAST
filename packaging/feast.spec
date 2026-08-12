@@ -44,12 +44,22 @@ if OS_TAG == "windows":
     else:
         print(f"WARNING: {mingw} not found; the bundle may not load libfeast")
 
-# FEAST's sample matrices back the built-in demos.
+# FEAST's sample matrices back the built-in problems. Ship all of them, so the
+# catalogue in feastpy/problems.py is not full of entries that vanish once the
+# app is packaged -- except the benzene pair, which is 68 MB of the 102 MB
+# total and is also the one problem that does not converge at its shipped
+# settings without MKL. problems.available() hides what is absent.
 datas = []
 data_dir = ROOT / "4.0" / "utility" / "data"
-for pattern in ("system1*.mtx", "system3*.mtx"):
-    for f in data_dir.glob(pattern):
-        datas.append((str(f), "feast_data"))
+skipped_mb = 0.0
+for f in sorted(data_dir.glob("*.mtx")):
+    if f.name.startswith("c6h6"):
+        skipped_mb += f.stat().st_size / 1048576
+        continue
+    datas.append((str(f), "feast_data"))
+print(f"bundling {len(datas)} sample matrices "
+      f"({sum(Path(d[0]).stat().st_size for d in datas) / 1048576:.0f} MB); "
+      f"skipping benzene ({skipped_mb:.0f} MB)")
 
 a = Analysis(
     [str(ROOT / "gui" / "app.py")],
