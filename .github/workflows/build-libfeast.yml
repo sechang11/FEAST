@@ -189,12 +189,22 @@ jobs:
           python -m pip install pyinstaller
           bash packaging/build-app.sh
 
+      # PyInstaller emits both a plain folder and, on macOS, a .app wrapped
+      # around a second copy of it. Uploading both doubled the macOS artifact
+      # to 1.4 GB of the same program twice. Ship the .app on macOS -- it is
+      # the double-clickable one -- and the folder everywhere else.
       - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
         with:
           name: FEAST-app-${{ matrix.arch }}
-          path: |
-            dist/FEAST-${{ matrix.arch }}/
-            dist/FEAST.app/
+          path: dist/FEAST.app/
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        if: runner.os != 'macOS'
+        with:
+          name: FEAST-app-${{ matrix.arch }}
+          path: dist/FEAST-${{ matrix.arch }}/
           if-no-files-found: warn
 
   universal:
