@@ -135,7 +135,14 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python dependencies
-        run: python -m pip install --upgrade pip numpy scipy PySide6 pyqtgraph psutil cryptography
+        run: |
+          python -m pip install --upgrade pip numpy scipy PySide6 pyqtgraph psutil
+          # cryptography belongs to the licensing layer, which is inert until a
+          # signing key is configured, and the package already runs without it.
+          # It has no wheel for every platform/Python pair -- macOS-Intel with
+          # 3.12 builds it from source through Rust -- so a crates.io outage
+          # must not fail the build of an eigensolver. Best effort.
+          python -m pip install cryptography             || echo "cryptography unavailable; the licensing layer stays inert" 
 
       - name: Expose the mingw DLLs (Windows)
         if: runner.os == 'Windows'
