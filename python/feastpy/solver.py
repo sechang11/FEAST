@@ -88,19 +88,41 @@ class FeastResult:
         return explain_info(self.info)
 
 
-def _make_fpm(contour_points: int, tol_exponent: int, max_loops: int,
-              verbose: bool, count_only: bool = False) -> np.ndarray:
-    """fpm is FEAST's 64-entry parameter array; feastinit fills in the defaults.
+def _make_fpm(contour_points: Optional[int], tol_exponent: Optional[int],
+              max_loops: Optional[int], verbose: bool,
+              count_only: bool = False, rule: Optional[int] = None,
+              ratio: Optional[int] = None) -> np.ndarray:
+    """fpm is FEAST's 64-entry parameter array.
 
     Note the index shift: the documentation uses Fortran's fpm(1..64), so
     fpm(N) is fpm[N-1] here.
+
+    feastinit does NOT fill in defaults -- it sets all 64 slots to -111, which
+    means "the user did not choose; let the routine decide". Each routine then
+    substitutes a default appropriate to itself, and those differ: the guide
+    gives 8 contour points for FEAST but 4 for IFEAST, and 20 refinement loops
+    for FEAST but 50 for IFEAST.
+
+    So writing a value here is not "setting the default", it is overriding the
+    routine's judgement. Doing that unconditionally forced 20 loops onto the
+    IFEAST routines these wrappers actually call, and system2 -- FEAST's own
+    complex Hermitian sample -- then stopped at info=2 (no convergence) with a
+    residual of 2.6e-06. Left alone it converges. Pass None to leave a slot at
+    -111; only an explicit value is written.
     """
     fpm = np.zeros(64, dtype=np.int32)
     _lib.sym("feastinit")(fpm.ctypes.data_as(ctypes.POINTER(_i)))
     fpm[0] = 1 if verbose else 0     # fpm(1)  runtime printing
-    fpm[1] = contour_points          # fpm(2)  quadrature points on the contour
-    fpm[2] = tol_exponent            # fpm(3)  stop at 1e-<tol_exponent>
-    fpm[3] = max_loops               # fpm(4)  max refinement loops
+    if contour_points is not None:
+        fpm[1] = contour_points      # fpm(2)  quadrature points on the contour
+    if tol_exponent is not None:
+        fpm[2] = tol_exponent        # fpm(3)  stop at 1e-<tol_exponent>
+    if max_loops is not None:
+        fpm[3] = max_loops           # fpm(4)  max refinement loops
+    if rule is not None:
+        fpm[15] = rule               # fpm(16) 0 Gauss, 1 Trapezoidal, 2 Zolotarev
+    if ratio is not None:
+        fpm[17] = ratio              # fpm(18) ellipse ratio x100
     if count_only:
         fpm[13] = 2                  # fpm(14) stochastic eigenvalue-count estimate
     return fpm
@@ -113,10 +135,12 @@ def eigh_interval(
     B: Optional[np.ndarray] = None,
     *,
     m0: Optional[int] = None,
-    contour_points: int = 8,
-    tol_exponent: int = 12,
-    max_loops: int = 20,
+    contour_points: Optional[int] = None,
+    tol_exponent: Optional[int] = None,
+    max_loops: Optional[int] = None,
     uplo: str = "F",
+    rule: Optional[int] = None,
+    ratio: Optional[int] = None,
     verbose: bool = False,
     count_only: bool = False,
 ) -> FeastResult:
@@ -150,7 +174,8 @@ def eigh_interval(
         m0 = min(n, max(10, n // 4))
     m0 = int(min(m0, n))
 
-    fpm = _make_fpm(contour_points, tol_exponent, max_loops, verbose, count_only)
+    fpm = _make_fpm(contour_points, tol_exponent, max_loops, verbose,
+                    count_only, rule, ratio)
 
     lam = np.zeros(m0, dtype=np.float64)             # eigenvalues are always real
     q = np.zeros((n, m0), dtype=dtype, order="F")
@@ -215,8 +240,8 @@ def eig_disc(
     *,
     m0: Optional[int] = None,
     contour_points: int = 16,
-    tol_exponent: int = 12,
-    max_loops: int = 20,
+    tol_exponent: Optional[int] = None,
+    max_loops: Optional[int] = None,
     uplo: str = "F",
     verbose: bool = False,
 ) -> FeastResult:
@@ -461,10 +486,12 @@ def eigsh_interval(
     B=None,
     *,
     m0: Optional[int] = None,
-    contour_points: int = 8,
-    tol_exponent: int = 12,
-    max_loops: int = 20,
+    contour_points: Optional[int] = None,
+    tol_exponent: Optional[int] = None,
+    max_loops: Optional[int] = None,
     uplo: str = "U",
+    rule: Optional[int] = None,
+    ratio: Optional[int] = None,
     verbose: bool = False,
     count_only: bool = False,
 ) -> FeastResult:
@@ -531,7 +558,8 @@ def eigsh_interval(
         m0 = min(n, max(10, n // 4))
     m0 = int(min(m0, n))
 
-    fpm = _make_fpm(contour_points, tol_exponent, max_loops, verbose, count_only)
+    fpm = _make_fpm(contour_points, tol_exponent, max_loops, verbose,
+                    count_only, rule, ratio)
 
     # Eigenvalues and residuals stay real -- a Hermitian matrix has real
     # eigenvalues -- but the eigenvectors follow the matrix.

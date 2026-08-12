@@ -27,7 +27,9 @@ from PySide6.QtWidgets import (
 
 import licensing
 import feastpy
-from feastpy import codegen, diagnostics, matrixio, results_io, runner
+from feastpy import (algorithms, codegen, contours, diagnostics, matrixio,
+                     problems, results_io, runner)
+from views import EigenvectorView, FilterView, MatrixView, SpectrumView
 
 APP_NAME = "FEAST Eigensolver"
 
@@ -392,6 +394,12 @@ class MainWindow(QMainWindow):
         self.matrix_path = None
         self.b_path = None
         self.result = None
+        # How the matrix in hand is stored, and therefore what we must tell
+        # FEAST. Recomputed from the data on every load: declaring 'L' for a
+        # full matrix makes FEAST count off-diagonals twice, and declaring 'F'
+        # for a half-stored one silently discards half the problem. Neither
+        # raises an error.
+        self._uplo = "F"
         self.bounds = None
         self.convergence = []
         self.diagnosis = None
@@ -418,11 +426,20 @@ class MainWindow(QMainWindow):
 
         src = QGroupBox("Matrix")
         sf = QVBoxLayout(src)
+        # Every problem FEAST 4.0 ships, not just a couple of synthetic ones:
+        # the 12 named problems its own Linux driver is meant to be run on,
+        # plus the generated demos. Grouped, with the ones the GUI cannot solve
+        # shown but disabled rather than quietly omitted -- a catalogue that
+        # hides what it cannot do is a catalogue you cannot trust.
         self.demo_combo = QComboBox()
-        self.demo_combo.addItems(list(matrixio.DEMOS.keys()))
+        self._populate_problems()
         self.demo_combo.currentIndexChanged.connect(self.load_demo)
         sf.addWidget(QLabel("Built-in problem:"))
         sf.addWidget(self.demo_combo)
+        self.problem_note = QLabel("")
+        self.problem_note.setWordWrap(True)
+        self.problem_note.setStyleSheet("color: palette(mid); font-size: 11px;")
+        sf.addWidget(self.problem_note)
         openrow = QHBoxLayout()
         open_btn = QPushButton("Open matrix file...")
         open_btn.clicked.connect(self.open_file)
@@ -535,9 +552,23 @@ class MainWindow(QMainWindow):
         self.loops.setValue(20)
         pf.addRow("Max loops", self.loops)
 
+        # The quadrature rule is a genuine algorithmic choice, not a tuning
+        # knob: it changes where the integration points sit and therefore the
+        # shape of the filter. Measured on the 200-point Laplacian it changes
+        # the loop count from 9 (Gauss) to 12 (Trapezoidal) to 11 (Zolotarev).
+        self.rule = QComboBox()
+        for r in (contours.GAUSS, contours.TRAPEZOIDAL, contours.ZOLOTAREV):
+            self.rule.addItem(contours.RULE_NAMES[r], r)
+        self.rule.setToolTip(algorithms.QUADRATURE.summary)
+        pf.addRow("Quadrature rule", self.rule)
+
         self.auto_m0 = QCheckBox("Retry automatically if M0 is too small")
         self.auto_m0.setChecked(True)
         pf.addRow(self.auto_m0)
+
+        explain = QPushButton("What do these options do?")
+        explain.clicked.connect(self.show_algorithm_help)
+        pf.addRow(explain)
         lv.addWidget(params)
 
         # Actions live outside the scroll area: Solve is the primary action and
@@ -620,9 +651,24 @@ class MainWindow(QMainWindow):
         self.conv_plot.showGrid(x=True, y=True, alpha=0.25)
         self.conv_plot.addLegend(offset=(-10, 10))
 
+        # The matrix, the filter and the eigenvectors were all things the app
+        # had access to and never showed. The filter in particular is the
+        # object FEAST's own documentation is about, and the library ships a
+        # routine (dfeast_rational) whose only purpose is to let you plot it.
+        self.matrix_view = MatrixView()
+        self.filter_view = FilterView()
+        self.accuracy_view = SpectrumView()
+        self.vector_view = EigenvectorView()
+        self.accuracy_view.picked.connect(self._show_eigenvector)
+
         self.tabs = QTabWidget()
+        self.tabs.addTab(self.matrix_view, "Matrix")
         self.tabs.addTab(self.plot, "Spectrum")
+        self.tabs.addTab(self.filter_view, "Filter && contour")
+        self.tabs.addTab(self.accuracy_view, "Accuracy")
+        self.tabs.addTab(self.vector_view, "Eigenvector")
         self.tabs.addTab(self.conv_plot, "Convergence")
+        self.tabs.currentChanged.connect(self._tab_changed)
         self.rsplit = QSplitter(Qt.Vertical)
         self.rsplit.setChildrenCollapsible(True)
         self.rsplit.addWidget(self.tabs)
@@ -851,8 +897,62 @@ class MainWindow(QMainWindow):
         self._log(f"  ERROR {msg}")
 
     @Slot()
+    def _populate_problems(self):
+        """Fill the built-in list: FEAST's own problems, then generated ones."""
+        from PySide6.QtGui import QStandardItem
+
+        combo = self.demo_combo
+        combo.blockSignals(True)
+        combo.clear()
+
+        def header(text):
+            combo.addItem(f"--- {text} ---")
+            item = combo.model().item(combo.count() - 1)
+            item.setEnabled(False)
+            f = item.font()
+            f.setBold(True)
+            item.setFont(f)
+
+        for group, plist in problems.groups().items():
+            usable = [p for p in plist if problems.available(p)]
+            if not usable:
+                continue
+            header(group)
+            for p in usable:
+                # Only interval searches are solvable here: a disc search needs
+                # a complex-plane region and the solve path takes Emin/Emax.
+                ok = (p.geometry == problems.INTERVAL)
+                label = f"{p.title}  (n={p.n:,})"
+                combo.addItem(label, ("problem", p.id))
+                if not ok:
+                    it = combo.model().item(combo.count() - 1)
+                    it.setEnabled(False)
+                    it.setToolTip(
+                        "Non-Hermitian: its eigenvalues are spread over the "
+                        "complex plane, so it needs a disc search. feastpy "
+                        "does this (eig_disc); this window is interval-only.")
+
+        header("Generated")
+        for name in matrixio.DEMOS:
+            combo.addItem(name, ("demo", name))
+
+        # Land on the first genuinely selectable row.
+        for i in range(combo.count()):
+            if combo.model().item(i).isEnabled():
+                combo.setCurrentIndex(i)
+                break
+        combo.blockSignals(False)
+
     def load_demo(self):
-        name = self.demo_combo.currentText()
+        data = self.demo_combo.currentData()
+        if isinstance(data, tuple) and data[0] == "problem":
+            self._load_catalogue_problem(problems.get(data[1]))
+            return
+        name = data[1] if isinstance(data, tuple) else self.demo_combo.currentText()
+        if name not in matrixio.DEMOS:
+            return
+        self.problem_note.setText("")
+        self._uplo = "F"
         build, emin, emax = matrixio.DEMOS[name]
         built = build()
         # Demos backed by files on disk report their paths so generated code
@@ -873,7 +973,146 @@ class MainWindow(QMainWindow):
             self._set_b(b, "paired with demo")
             self.b_path = demo_b
         self._update_spectrum_view()
+        self._refresh_matrix_view(name)
         self._log(f"loaded demo: {name}")
+
+    def _load_catalogue_problem(self, p):
+        """Load one of the problems FEAST itself ships, with its own settings."""
+        self._log(f"loading {p.title} ...")
+        QApplication.processEvents()          # a 49k-row matrix takes a moment
+        try:
+            A, B = problems.load(p)
+        except Exception as exc:
+            QMessageBox.warning(self, "Could not load", str(exc))
+            return
+
+        self.matrix, self.b_matrix = A, None
+        self.matrix_path, self.b_path = p.a_file, p.b_file
+        self.clear_b_btn.setEnabled(False)
+        self.b_label.setText("no B - standard problem A x = λ x")
+        if B is not None:
+            keep = p.b_file
+            self._set_b(B, "shipped with this problem")
+            self.b_path = keep
+
+        # The .in file's UPLO describes the file; what matters is the array we
+        # actually hold, which differs for the one problem carrying a Matrix
+        # Market banner (scipy mirrors it).
+        self._uplo = problems.effective_uplo(A, p.uplo)
+        self.emin.setValue(p.emin)
+        self.emax.setValue(p.emax)
+        self.m0.setValue(min(p.m0, A.shape[0]))
+        self.matrix_label.setText(matrixio.describe(A))
+
+        note = p.about
+        if p.note:
+            note += "  " + p.note
+        if p.caveat:
+            note = "⚠ " + p.caveat + "  " + note
+        self.problem_note.setText(note)
+
+        self._update_spectrum_view()
+        self._refresh_matrix_view(p.title)
+        self._log(f"loaded {p.title}: n={A.shape[0]}, search {p.search_text}, "
+                  f"M0={p.m0}, uplo={self._uplo}")
+        if p.caveat:
+            self._log("note: " + p.caveat)
+
+    def show_algorithm_help(self):
+        """Every algorithmic option FEAST offers, explained in plain English.
+
+        The guide documents the parameters but not which to reach for, and
+        several of the most useful ones -- the iterative preconditioner, for
+        one -- are not documented at all.
+        """
+        dlg = QDialog(self)
+        dlg.setWindowTitle("FEAST algorithm options")
+        dlg.resize(760, 620)
+        lv = QVBoxLayout(dlg)
+        body = QTextEdit()
+        body.setReadOnly(True)
+
+        herm = True
+        html = ["<h2>Algorithm options</h2>",
+                "<p>FEAST is a contour-integration solver. These are the "
+                "choices that change what it does, not just how long it "
+                "takes. Values in <b>bold</b> are what FEAST uses if you do "
+                "not choose.</p>"]
+        for tier in algorithms.tiers():
+            opts = [o for o in algorithms.for_problem(herm, tier)]
+            if not opts:
+                continue
+            html.append(f"<h3>{algorithms.TIER_LABELS[tier]}</h3>")
+            for o in opts:
+                html.append(f"<p><b>{o.label}</b> "
+                            f"<code>{o.key}</code><br>"
+                            f"{o.detail.replace(chr(10) + chr(10), '<br><br>')}")
+                if o.choices:
+                    html.append("<ul>" + "".join(
+                        f"<li><b>{c.label}</b> — {c.detail}"
+                        + (f"<br><i>Caveat: {c.caveat}</i>" if c.caveat else "")
+                        + "</li>" for c in o.choices) + "</ul>")
+                if o.default_text:
+                    html.append(f"<br><b>Default:</b> {o.default_text}")
+                if o.caveat:
+                    html.append(f"<br><i>Caveat: {o.caveat}</i>")
+                html.append("</p>")
+        body.setHtml("".join(html))
+        lv.addWidget(body)
+        close = QPushButton("Close")
+        close.clicked.connect(dlg.accept)
+        lv.addWidget(close)
+        dlg.exec()
+
+    def _update_views(self, r):
+        """Feed a finished solve to the new views. Never fatal: a plot that
+        cannot draw must not lose the user their result."""
+        emin, emax = self.emin.value(), self.emax.value()
+        try:
+            # The subspace slots FEAST examined and rejected as outside the
+            # interval. Showing them is how "is M0 big enough" stops being
+            # folklore: if none were rejected, the subspace was full to the brim.
+            rej = rej_res = None
+            if r.all_eigenvalues is not None and r.n_found < len(r.all_eigenvalues):
+                rej = r.all_eigenvalues[r.n_found:]
+                rej_res = r.all_residuals[r.n_found:]
+                keep = np.isfinite(rej) & (np.abs(rej) < 1e30)
+                rej, rej_res = rej[keep], rej_res[keep]
+            tol = 10.0 ** (-self.tol.value()) if hasattr(self, "tol") else None
+            self.accuracy_view.show_result(np.real(r.eigenvalues), r.residuals,
+                                           emin, emax, rej, rej_res, tol)
+        except Exception as exc:
+            self._log(f"accuracy view unavailable: {exc}")
+        try:
+            self.vector_view.set_result(r.eigenvalues, r.eigenvectors)
+        except Exception as exc:
+            self._log(f"eigenvector view unavailable: {exc}")
+        try:
+            self.filter_view.show_interval(emin, emax, np.real(r.eigenvalues))
+        except Exception as exc:
+            self._log(f"filter view unavailable: {exc}")
+
+    def _tab_changed(self, _index: int):
+        """The filter depends only on the interval, so it is worth drawing
+        before any solve -- that is the point of it. Refresh on reveal."""
+        if self.tabs.currentWidget() is self.filter_view:
+            try:
+                vals = np.real(self.result.eigenvalues) if self.result else None
+                self.filter_view.show_interval(self.emin.value(),
+                                               self.emax.value(), vals)
+            except Exception as exc:
+                self._log(f"filter view unavailable: {exc}")
+
+    def _show_eigenvector(self, idx: int):
+        self.vector_view.show_index(idx)
+        self.tabs.setCurrentWidget(self.vector_view)
+
+    def _refresh_matrix_view(self, title: str):
+        try:
+            self.matrix_view.show_matrix(self.matrix, self.b_matrix,
+                                         getattr(self, "_uplo", "F"), title)
+        except Exception as exc:                      # never block a load
+            self._log(f"matrix view unavailable: {exc}")
 
     def _clear_demo_selection(self):
         """Stop the dropdown claiming a demo is loaded when it is not.
@@ -997,9 +1236,15 @@ class MainWindow(QMainWindow):
         self._clear_demo_selection()
         self.clear_b_btn.setEnabled(False)
         self.b_label.setText("no B - standard problem A x = λ x")
+        # Read the storage off the data rather than assuming. FEAST's own
+        # sample files are a mix: some ship both triangles, some only the
+        # lower one, and only bcsstk11 carries a banner saying so.
+        self._uplo = problems.effective_uplo(M, "F") if sp.issparse(M) else "F"
         self.matrix_label.setText(matrixio.describe(M))
         self._update_spectrum_view()
-        self._log(f"loaded {Path(path).name}: {matrixio.describe(M)}")
+        self._refresh_matrix_view(Path(path).name)
+        self._log(f"loaded {Path(path).name}: {matrixio.describe(M)} "
+                  f"(stored as uplo='{self._uplo}')")
 
         # FEAST names generalized pairs system1.mtx / system1B.mtx, so offer
         # the partner rather than making the user go find it.
@@ -1039,6 +1284,11 @@ class MainWindow(QMainWindow):
             contour_points=self.contour.value(),
             tol_exponent=self.tol.value(),
             max_loops=self.loops.value(),
+            rule=self.rule.currentData(),
+            # The built-in problems declare how their file is stored; a matrix
+            # opened from disk is assumed full. Getting this wrong silently
+            # discards half the matrix, so it is threaded explicitly.
+            uplo=getattr(self, "_uplo", "F"),
         )
         if not self.solving:          # a fresh solve, not an auto-retry
             self.convergence = []
@@ -1136,6 +1386,9 @@ class MainWindow(QMainWindow):
         self._log(f"  info={r.info} ({r.message})")
         self._log(f"  found {r.n_found} eigenvalues in {r.loops} loop(s), "
                   f"epsout={r.epsout:.2e}, {secs:.2f}s")
+        if getattr(r, "routine", ""):
+            self._log(f"  routine: {r.routine}")
+        self._update_views(r)
         self.statusBar().showMessage(
             f"{r.n_found} eigenvalues  |  {secs:.2f}s  |  {r.message}")
 

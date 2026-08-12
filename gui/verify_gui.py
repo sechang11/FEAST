@@ -5,6 +5,7 @@ Exercises the whole intended flow: load -> spectral bounds -> estimate count
 (which sets M0) -> drag the interval band -> solve.
 """
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -229,7 +230,14 @@ def _poll():
                         platform.machine().lower(), "x64")
         arch = f"{os_tag}-{mach_tag}"
         lib = root / "4.0" / "lib" / arch / "libfeast.a"
-        if lib.exists():
+        # A developer box need not have a C toolchain -- Windows generally has
+        # no `cc` unless MSYS2 is on PATH. That is not a product failure, so
+        # skip rather than crash the whole run; CI always has one.
+        cc_bin = os.environ.get("CC", "cc")
+        have_cc = shutil.which(cc_bin) is not None
+        if lib.exists() and not have_cc:
+            print(f"  SKIP  generated C compiles and links  (no {cc_bin} on PATH)")
+        if lib.exists() and have_cc:
             # Same split as build/run-test.sh: compile the C with the C
             # compiler, but link with the Fortran driver. Apple's clang rejects
             # -fopenmp outright and does not know where libgfortran lives.
