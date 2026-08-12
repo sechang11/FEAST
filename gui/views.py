@@ -264,16 +264,30 @@ class MatrixView(QWidget):
         A = sp.csr_matrix(A)
         n = A.shape[0]
 
+        # Show the matrix, not the storage. A symmetric matrix given to FEAST
+        # as one triangle is still that whole matrix -- displaying the stored
+        # half literally puts zeros where the guide prints -1, so the 4x4 in
+        # section 2.4 would not match the 4x4 on screen. Mirror for display and
+        # say that is what happened.
+        display = A
+        mirrored = False
+        if uplo in ("L", "U") and n:
+            off = sp.tril(A, k=-1) if uplo == "L" else sp.triu(A, k=1)
+            if off.nnz:
+                display = A + (off.getH() if np.iscomplexobj(A.data) else off.T)
+                mirrored = True
+
         if n <= self.NUMERIC_LIMIT:
             self.image.hide()
             self.numbers.show()
-            self.numbers.setText(self._as_text(A))
+            self.numbers.setText(self._as_text(display))
         else:
             self.numbers.hide()
             self.image.show()
-            self.image.setImage(self._pattern(A), autoLevels=True)
+            self.image.setImage(self._pattern(display), autoLevels=True)
+        self._mirrored = mirrored
 
-        self.facts.setText(self._describe(A, B, uplo, title, n))
+        self.facts.setText(self._describe(A, B, uplo, title, n, mirrored))
 
     # -- helpers -----------------------------------------------------------
     @staticmethod
@@ -308,7 +322,7 @@ class MatrixView(QWidget):
         return img.T[:, ::-1]        # row 0 at the top, as a matrix is written
 
     @staticmethod
-    def _describe(A, B, uplo, title, n) -> str:
+    def _describe(A, B, uplo, title, n, mirrored=False) -> str:
         stored = A.nnz
         density = 100.0 * stored / (n * n) if n else 0.0
         parts = [f"<b>{title or 'matrix'}</b>", f"size {n} x {n}",
@@ -317,11 +331,14 @@ class MatrixView(QWidget):
         upper = sp.triu(A, k=1).nnz
         lower = sp.tril(A, k=-1).nnz
         if upper and not lower:
-            parts.append("upper triangle only")
+            parts.append("upper triangle stored")
         elif lower and not upper:
-            parts.append("lower triangle only")
+            parts.append("lower triangle stored")
         else:
             parts.append("both triangles stored")
+        if mirrored:
+            parts.append("<i>shown in full: the other half is implied by the "
+                         "symmetry, and is what FEAST reconstructs</i>")
         parts.append(f"declared to FEAST as uplo='{uplo}'")
 
         # Bandwidth decides whether the banded routines are even applicable.

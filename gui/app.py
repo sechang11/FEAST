@@ -450,7 +450,7 @@ class MainWindow(QMainWindow):
         sf.addWidget(self.demo_combo)
         self.problem_note = QLabel("")
         self.problem_note.setWordWrap(True)
-        self.problem_note.setStyleSheet("color: palette(mid); font-size: 11px;")
+        self.problem_note.setStyleSheet("font-size: 11px; font-style: italic;")
         sf.addWidget(self.problem_note)
         openrow = QHBoxLayout()
         open_btn = QPushButton("Open matrix file...")
