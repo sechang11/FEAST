@@ -114,11 +114,35 @@ All three are self-contained: unzip and run. No Python, no compilers, nothing.
 | Family | Windows | Linux | Mac | **Web** | Why |
 |---|---|---|---|---|---|
 | Dense | ✅ | ✅ | ✅ | ✅ to 500×500 | Works everywhere |
-| Sparse (iterative) | ✅ | ✅ | ✅ | ✅ to 5,000 | Works everywhere |
+| Sparse, real symmetric | ✅ | ✅ | ✅ | ✅ to 5,000 | Works everywhere |
+| Sparse, complex Hermitian | ✅ | ✅ | ✅ | ✅ | **Fixed** — was silently solving the wrong matrix (see §9) |
 | Sparse polynomial | ✅ | ✅ | ✅ | ❌ | Works everywhere via the *iterative* routine. The calculator's page just doesn't offer it yet — the backend could. |
-| Banded | ✅ | ✅ | untested | ❌ | Needs SPIKE. **We have it now**; the calculator page doesn't offer it. |
-| Non-Hermitian (complex discs) | ✅ | ✅ | untested | ❌ | `feastpy` does it. The calculator is interval-only, and complex spectra need a 2-D picture. |
+| Banded | ✅ | ✅ | ✅ | ❌ | Needs SPIKE. Now built and tested on **all four** CI platforms including Apple Silicon. |
+| Non-Hermitian (complex discs) | ✅ | ✅ | ✅ | ❌ | `feastpy` does it; the desktop app and calculator are interval-only, and complex spectra need a 2-D picture. |
 | PFEAST (clusters) | builds, crashes | ✅ | untested | ❌ | For clusters. Meaningless in a browser. |
+
+### The app's views, by platform
+
+Everything below is in the desktop app on all three systems — same code, same
+tests. The web calculator is a deliberately smaller thing.
+
+| View | Windows | Linux | Mac | **Web** | What it shows |
+|---|---|---|---|---|---|
+| Matrix | ✅ | ✅ | ✅ | ❌ | The matrix itself: exact numbers below 24×24, sparsity pattern above, plus bandwidth and a symmetry audit |
+| Spectrum | ✅ | ✅ | ✅ | ✅ | Where the eigenvalues are, with a draggable search interval |
+| Filter & contour | ✅ | ✅ | ✅ | ❌ | **New.** The rational filter and the quadrature contour — the objects FEAST's own papers are about |
+| Accuracy | ✅ | ✅ | ✅ | ❌ | **New.** Eigenvalue vs residual, with the rejected subspace slots shown hollow |
+| Eigenvector | ✅ | ✅ | ✅ | ❌ | **New.** Click an eigenvalue, see its eigenvector |
+| Convergence | ✅ | ✅ | ✅ | ❌ | Error per refinement loop |
+| Built-in problems | 11 | 13 | 13 | 2 | FEAST's own samples. Windows ships 11: benzene is 68 MB and excluded from the bundle |
+| Algorithm options + explanations | ✅ | ✅ | ✅ | ❌ | 19 options, each explained in plain English |
+
+**Why the web column is so much emptier.** Not capability — the calculator calls
+the same `feastpy`. It is that a browser session is anonymous, shared, and
+time-limited: a 30-second cap and roughly two solves a second sustained across
+all visitors. The desktop app owns your whole machine and can take six minutes
+on bcsstk11 if you want. Everything marked ❌ above is a page nobody has built
+yet, not a thing the backend cannot do.
 
 **The web column is a UI limit, not a capability limit.** The calculator calls
 the same `feastpy` as the app, so anything the app can do the backend can do —
@@ -280,7 +304,50 @@ there's one implementation to keep correct, not three.
 
 ---
 
-## 8. Glossary
+## 8. What reading the manual turned up
+
+The v4.0 User Guide (arXiv 2002.04807) was read against the source, all 36
+example programs, the 12 shipped problems and the original Linux driver. Five
+things came out of it that changed the product.
+
+**Three bugs in our own code, all of the silent kind.**
+
+1. **We were solving the wrong matrix.** Handed a complex Hermitian sparse
+   matrix, the solver built its arrays as real and threw the imaginary part
+   away. FEAST then solved the real part — a different matrix — and returned
+   `info=0`, success. Measured on a 40×40 case: 2 eigenvalues returned where 5
+   exist, none within 0.65 of a true one. Now routed to the complex routine:
+   5 of 5, error 3×10⁻¹⁴. This is what the desktop app and the web calculator
+   both use.
+2. **We were overriding FEAST's own defaults.** `feastinit` does not fill in
+   defaults — it sets all 64 parameters to a marker meaning *"let the routine
+   decide"*, and different routines decide differently: 20 refinement loops for
+   FEAST, 50 for IFEAST. We wrote 20 unconditionally. FEAST's own `system2`
+   sample stopped short at `info=2` with a residual of 2.6×10⁻⁶; left alone it
+   converges to 6×10⁻¹³.
+3. **A "guaranteed" bound that wasn't.** The spectrum bracket used an iterative
+   solver's approximate answer as if exact, so it could cut *inside* the real
+   spectrum. Windows CI caught it at 1.332 against a true maximum of 1.3328.
+
+**Two bugs in FEAST itself, worth sending to Eric** (§7, items 11–12): four
+routines are declared in the C header with seven arguments where the Fortran
+has eight, which corrupts memory for any C caller; and `fpm(17)` is required by
+those routines but appears nowhere in the manual.
+
+**And the thing that reshaped the GUI.** FEAST ships a routine,
+`dfeast_rational`, that computes nothing you can solve with. Its only purpose
+is to let you *plot the filter* — the function that is ~1 inside your search
+interval and ~0 outside. That is the object the whole method is built on, and
+the app never showed it. Measured on [0,1]: 4 contour points separate inside
+from outside by a factor of 70, 8 points by 18,000, 16 points by 56 million.
+One picture explains why more contour points help, why the subspace must be
+bigger than the answer, and why an interval edge must never sit on an
+eigenvalue — the filter is exactly 0.5 there, so such an eigenvalue is counted
+half in and half out.
+
+---
+
+## 9. Glossary
 
 | Term | Plain English |
 |---|---|
