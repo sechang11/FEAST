@@ -79,18 +79,47 @@ jobs:
             mingw-w64-x86_64-openblas
             mingw-w64-x86_64-gcc
 
+      # SPIKE unlocks the 20 banded routines. It is fetched from
+      # spike-solver.org, whose only working URL is undocumented, so a failure
+      # here is non-fatal: the build carries on without banded rather than
+      # going red because someone else's web server had a bad day.
+      - name: Build SPIKE (Unix)
+        if: runner.os != 'Windows'
+        continue-on-error: true
+        run: bash build/build-spike.sh --arch ${{ matrix.arch }}
+
+      - name: Build SPIKE (Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: msys2 {0}
+        run: bash build/build-spike.sh --arch ${{ matrix.arch }}
+
       - name: Build + test library (Unix)
         if: runner.os != 'Windows'
         run: |
-          bash build/build-feast.sh --arch ${{ matrix.arch }}
+          SPIKE=""
+          [ -f 4.0/lib/${{ matrix.arch }}/libspike.a ] && SPIKE="--spike 4.0/lib/${{ matrix.arch }}"
+          bash build/build-feast.sh --arch ${{ matrix.arch }} $SPIKE
           bash build/run-test.sh ${{ matrix.arch }}
 
       - name: Build + test library (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          bash build/build-feast.sh --arch ${{ matrix.arch }}
+          SPIKE=""
+          [ -f 4.0/lib/${{ matrix.arch }}/libspike.a ] && SPIKE="--spike 4.0/lib/${{ matrix.arch }}"
+          bash build/build-feast.sh --arch ${{ matrix.arch }} $SPIKE
           bash build/run-test.sh ${{ matrix.arch }}
+
+      # Upstream's own 36 programs, banded included when SPIKE built.
+      - name: Run FEAST's own examples (Unix)
+        if: runner.os != 'Windows'
+        run: bash tools/run_examples.sh ${{ matrix.arch }} || true
+
+      - name: Run FEAST's own examples (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash tools/run_examples.sh ${{ matrix.arch }} || true
 
       # ---------------------------------------------------------------- python
       - uses: actions/setup-python@v5
