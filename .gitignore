@@ -55,3 +55,7 @@ licensing/issued.csv
 # SPIKE is fetched on demand by build/build-spike.sh, not vendored:
 # it is a separate package with its own licence.
 build/spike/
+
+# Packaged app bundles -- build artefacts, rebuilt by packaging/build-app.sh
+release/
+dist/
