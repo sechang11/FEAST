@@ -296,10 +296,14 @@ _EXAMPLE_ONLY = [
         note="Needs all three matrices. Its 20 eigenvalues sit in a tight "
              "cluster around -1.5738, hence the small radius and the very flat "
              "contour (ratio 7) the example uses.",
-        caveat="Converges slowly without MKL: 89 loops and about 15 seconds to "
-               "reach a residual of 9.4e-07, so it is set up for 1e-6 rather "
-               "than the usual 1e-12. M0 is the lever -- at M0=60 the residual "
-               "stalls at 5.6e-04 no matter how many loops it is given."),
+        caveat="Marginal without MKL. It reliably finds all 20 eigenvalues in "
+               "the right places, but how far the residual falls inside the "
+               "loop cap depends on the machine: 9.4e-07 in 89 loops on one "
+               "box, 4.2e-05 on another with identical inputs, because the "
+               "inner solver is iterative and follows the BLAS and thread "
+               "count. Set up for 1e-6 rather than the usual 1e-12. M0 is the "
+               "lever -- at M0=60 the residual stalls at 5.6e-04 however many "
+               "loops it is given. A direct solver would settle it."),
 ]
 
 ALL: tuple = tuple(_DATA_PROBLEMS + _EXAMPLE_ONLY)
