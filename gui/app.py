@@ -936,11 +936,22 @@ class MainWindow(QMainWindow):
         for name in matrixio.DEMOS:
             combo.addItem(name, ("demo", name))
 
-        # Land on the first genuinely selectable row.
+        # Open on the 1-D Laplacian, not on whatever happens to be first.
+        # FEAST's own hello-world is a 4x4 with two eigenvalues at the same
+        # place -- ideal for checking the arithmetic by hand, and a poor first
+        # impression of a spectrum plot.
+        default = next(iter(matrixio.DEMOS), None)
+        target = 0
         for i in range(combo.count()):
-            if combo.model().item(i).isEnabled():
-                combo.setCurrentIndex(i)
+            if not combo.model().item(i).isEnabled():
+                continue
+            data = combo.itemData(i)
+            if isinstance(data, tuple) and data == ("demo", default):
+                target = i
                 break
+            if not target:
+                target = i          # fall back to the first usable row
+        combo.setCurrentIndex(target)
         combo.blockSignals(False)
 
     def load_demo(self):
