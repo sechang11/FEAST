@@ -79,10 +79,11 @@ certain appliances.
 |---|---|---|
 | **BLAS/LAPACK** | Basic matrix arithmetic. Every scientific program uses one. | Yes — we use **OpenBLAS** (free, open source) |
 | **MKL** | Intel's version of the above, plus **PARDISO** (a fast solver) | Optional. Free to download, 836 MB, x86 only |
-| **SPIKE** | A specialist solver for *banded* matrices | **No — the download is dead** |
+| **SPIKE** | A specialist solver for *banded* matrices | Yes — found and built; CI builds it on all four platforms |
 | **MPI** | Lets one program run across many computers | Optional, needed only for PFEAST |
 
-Three of the four are fine. **SPIKE is the problem** — see section 7.
+All four are in hand. SPIKE took the longest: its download links are dead,
+and the working URL had to be found by hand (see section 7).
 
 ### Why "which BLAS" turned out to matter enormously
 
@@ -115,7 +116,7 @@ All three are self-contained: unzip and run. No Python, no compilers, nothing.
 |---|---|---|---|---|---|
 | Dense | ✅ | ✅ | ✅ | ✅ to 500×500 | Works everywhere |
 | Sparse, real symmetric | ✅ | ✅ | ✅ | ✅ to 5,000 | Works everywhere |
-| Sparse, complex Hermitian | ✅ | ✅ | ✅ | ✅ | **Fixed** — was silently solving the wrong matrix (see §9) |
+| Sparse, complex Hermitian | ✅ | ✅ | ✅ | ✅ | **Fixed** — was silently solving the wrong matrix (see §8) |
 | Sparse polynomial | ✅ | ✅ | ✅ | ❌ | Works everywhere via the *iterative* routine. The calculator's page just doesn't offer it yet — the backend could. |
 | Banded | ✅ | ✅ | ✅ | ❌ | Needs SPIKE. Now built and tested on **all four** CI platforms including Apple Silicon. |
 | Non-Hermitian (complex discs) | ✅ | ✅ | ✅ | ❌ | `feastpy` does it; the desktop app and calculator are interval-only, and complex spectra need a 2-D picture. |
@@ -144,11 +145,6 @@ all visitors. The desktop app owns your whole machine and can take six minutes
 on bcsstk11 if you want. Everything marked ❌ above is a page nobody has built
 yet, not a thing the backend cannot do.
 
-**The web column is a UI limit, not a capability limit.** The calculator calls
-the same `feastpy` as the app, so anything the app can do the backend can do —
-those pages simply haven't been built. The only real web-specific limits are
-size and time, below.
-
 **Why Linux looks ahead — and mostly isn't.** There is nothing Windows or macOS
 cannot do here. The differences are:
 
@@ -163,9 +159,9 @@ cannot do here. The differences are:
 - **MPI exists on all three** (Microsoft MPI, Homebrew, Linux packages). We
   built PFEAST on Linux only because that is where clusters live.
 
-**Nothing important is missing on any platform.** The single real gap is banded
-matrices, and that is missing *everywhere*, Linux included, because the SPIKE
-package cannot be downloaded by anyone.
+**Nothing important is missing on any platform.** Banded was the one real gap,
+and it is closed: SPIKE now builds in CI on Windows, Linux and both Macs, so
+the 20 banded routines work everywhere.
 
 ### What the web calculator costs to run
 
@@ -243,13 +239,13 @@ there's one implementation to keep correct, not three.
 
 ## 7. What to ask Eric
 
-**The one that actually blocks us:**
+**The one worth telling him first:**
 
-1. **Can you give us SPIKE?** spike-solver.org's download links all return
-   "404 not found" — the files are gone. No source is published anywhere. It's
-   his lab's package, so he probably has it on a hard drive. Without it, 20
-   routines and 10 examples can't be built by anyone, including people
-   downloading FEAST today. **He may not know the links are broken.**
+1. **The SPIKE download links are broken.** Every link on spike-solver.org
+   returns "404 not found". We eventually found a working URL and now build
+   SPIKE automatically, so we are unblocked — but nobody downloading FEAST
+   today can build the 20 banded routines by following his own instructions.
+   **He may not know.** A one-line fix on his site.
 
 **Decisions only he can make:**
 
