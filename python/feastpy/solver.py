@@ -71,6 +71,13 @@ class FeastResult:
     # eigenvectors as well, and it helps to know which routine ran.
     left_eigenvectors: Optional[np.ndarray] = None
     routine: str = ""
+    # All M0 subspace slots, not just the M accepted ones, plus the parameter
+    # array FEAST returned. fpm carries output slots too -- fpm(30) says which
+    # routine actually ran and fpm(60) counts inner BiCGStab iterations -- so
+    # without it there is no way to report what really happened.
+    all_eigenvalues: Optional[np.ndarray] = None
+    all_residuals: Optional[np.ndarray] = None
+    fpm: Optional[np.ndarray] = None
 
     @property
     def converged(self) -> bool:
@@ -189,6 +196,14 @@ def eigh_interval(
         epsout=epsout.value,
         info=info.value,
         subspace_used=m0,
+        routine=name,
+        # FEAST fills all M0 slots; those past M hold the Ritz values it
+        # examined and rejected as outside the interval. Truncating to M threw
+        # away the evidence for whether the subspace was big enough, so keep it
+        # alongside the headline answer rather than instead of it.
+        all_eigenvalues=lam.copy(),
+        all_residuals=res.copy(),
+        fpm=fpm.copy(),
     )
 
 
@@ -453,15 +468,26 @@ def eigsh_interval(
     verbose: bool = False,
     count_only: bool = False,
 ) -> FeastResult:
-    """Sparse (CSR) real-symmetric version of :func:`eigh_interval`.
+    """Sparse (CSR) Hermitian version of :func:`eigh_interval`.
 
-    Uses the IFEAST routines (difeast_scsr*), which solve the inner linear
-    systems iteratively. The direct routines (dfeast_scsr*) need MKL-PARDISO,
-    which is absent from an MKL=no build -- so these are the portable choice.
+    A real-symmetric A dispatches to difeast_scsr{ev,gv}; a complex-Hermitian A
+    to zifeast_hcsr{ev,gv}. These are the IFEAST routines, which solve the inner
+    linear systems iteratively; the direct routines (dfeast_scsr*) need
+    MKL-PARDISO, absent from an MKL=no build, so these are the portable choice.
+
+    Eigenvalues of a Hermitian matrix are real whatever the matrix is, so
+    `eigenvalues` is real in both cases; only `eigenvectors` turns complex.
     """
     import scipy.sparse as sp
 
     A = sp.csr_matrix(A)
+    # A complex matrix MUST NOT be handed to the real routines. Casting it
+    # silently drops the imaginary part, and FEAST then solves a different
+    # matrix and reports info=0 -- success, on the wrong problem. Measured on a
+    # 40x40 complex Hermitian case: 2 eigenvalues returned instead of 5, none
+    # within 0.65 of a true one, info=0 throughout.
+    complex_problem = np.iscomplexobj(A.data) or (
+        B is not None and np.iscomplexobj(sp.csr_matrix(B).data))
     n = A.shape[0]
     if A.shape[0] != A.shape[1]:
         raise ValueError(f"A must be square, got shape {A.shape}")
@@ -474,16 +500,30 @@ def eigsh_interval(
     uplo = uplo.upper()
     if uplo not in ("U", "L", "F"):
         raise ValueError(f"uplo must be 'U', 'L' or 'F', got {uplo!r}")
+    # A full complex matrix that is not Hermitian has complex eigenvalues, so an
+    # interval search is meaningless -- say so rather than returning nonsense.
+    # Only checkable for uplo='F'; with one triangle stored we trust the
+    # declaration, exactly as FEAST does.
+    if complex_problem and uplo == "F":
+        d = abs(A - A.getH()).max() if A.nnz else 0.0
+        if d > 1e-10 * max(1.0, abs(A).max()):
+            raise ValueError(
+                f"A is complex but not Hermitian (max|A - A^H| = {d:.3e}). Its "
+                "eigenvalues are not real, so an interval search cannot find "
+                "them -- use eig_disc() to search a disc in the complex plane.")
+
+    dtype = np.complex128 if complex_problem else np.float64
+
     A = _as_uplo(A, uplo)
     A.sort_indices()
-    sa = np.ascontiguousarray(A.data, dtype=np.float64)
+    sa = np.ascontiguousarray(A.data, dtype=dtype)
     isa = np.ascontiguousarray(A.indptr + 1, dtype=np.int32)
     jsa = np.ascontiguousarray(A.indices + 1, dtype=np.int32)
 
     if B is not None:
         B = _as_uplo(sp.csr_matrix(B), uplo)
         B.sort_indices()
-        sb = np.ascontiguousarray(B.data, dtype=np.float64)
+        sb = np.ascontiguousarray(B.data, dtype=dtype)
         isb = np.ascontiguousarray(B.indptr + 1, dtype=np.int32)
         jsb = np.ascontiguousarray(B.indices + 1, dtype=np.int32)
 
@@ -493,8 +533,10 @@ def eigsh_interval(
 
     fpm = _make_fpm(contour_points, tol_exponent, max_loops, verbose, count_only)
 
+    # Eigenvalues and residuals stay real -- a Hermitian matrix has real
+    # eigenvalues -- but the eigenvectors follow the matrix.
     lam = np.zeros(m0, dtype=np.float64)
-    q = np.zeros((n, m0), dtype=np.float64, order="F")
+    q = np.zeros((n, m0), dtype=dtype, order="F")
     res = np.zeros(m0, dtype=np.float64)
 
     epsout, loop, mode, info = _d(0.0), _i(0), _i(0), _i(0)
@@ -502,7 +544,10 @@ def eigsh_interval(
     emin_c, emax_c = _d(emin), _d(emax)
     uplo_c = ctypes.c_char(uplo.upper().encode()[:1])
 
-    name = "difeast_scsrgv" if B is not None else "difeast_scsrev"
+    if complex_problem:
+        name = "zifeast_hcsrgv" if B is not None else "zifeast_hcsrev"
+    else:
+        name = "difeast_scsrgv" if B is not None else "difeast_scsrev"
     fn = _lib.sym(name)
 
     args = [ctypes.byref(uplo_c), ctypes.byref(n_c),
@@ -536,4 +581,12 @@ def eigsh_interval(
         epsout=epsout.value,
         info=info.value,
         subspace_used=m0,
+        routine=name,
+        # FEAST fills all M0 slots; those past M hold the Ritz values it
+        # examined and rejected as outside the interval. Truncating to M threw
+        # away the evidence for whether the subspace was big enough, so keep it
+        # alongside the headline answer rather than instead of it.
+        all_eigenvalues=lam.copy(),
+        all_residuals=res.copy(),
+        fpm=fpm.copy(),
     )

@@ -1,4 +1,6 @@
 """Checks the ctypes binding against problems with known answers."""
+import warnings
+
 import numpy as np
 import scipy.io
 import scipy.sparse as sp
@@ -353,6 +355,52 @@ results.append(check("empty interval reports info=1", empty.info == 1 and empty.
 too_small = feastpy.eigh_interval(laplacian(), 0.0, 0.05, m0=2)
 results.append(check("undersized m0 reports info=3", too_small.info == 3,
                      f"info={too_small.info} ({too_small.message})"))
+
+# --- complex Hermitian must not be cast to real ------------------------------
+# Regression: eigsh_interval used to build its CSR arrays as float64
+# unconditionally, so a complex Hermitian matrix lost its imaginary part. FEAST
+# then solved the real part, found 2 of 5 eigenvalues, none within 0.65 of a
+# true one -- and returned info=0. Silent success on the wrong matrix.
+print("\ncomplex Hermitian sparse:")
+_rng = np.random.default_rng(0)
+_H = _rng.standard_normal((40, 40)) + 1j * _rng.standard_normal((40, 40))
+_H = _H + _H.conj().T
+_true = np.linalg.eigvalsh(_H)
+_lo, _hi = _true[2] - 0.01, _true[6] + 0.01
+_want = int(((_true > _lo) & (_true < _hi)).sum())
+
+with warnings.catch_warnings(record=True) as _w:
+    warnings.simplefilter("always")
+    _rh = feastpy.eigsh_interval(sp.csr_matrix(_H), _lo, _hi, m0=20, uplo="F")
+    _cast = [x for x in _w if "omplex" in str(x.message)]
+
+results.append(check("no complex-to-real cast", not _cast,
+                     f"{len(_cast)} casting warning(s)"))
+results.append(check("dispatches to the Hermitian routine",
+                     _rh.routine == "zifeast_hcsrev", _rh.routine))
+results.append(check("finds every eigenvalue in the interval",
+                     _rh.n_found == _want, f"found {_rh.n_found} of {_want}"))
+_errh = max(min(abs(_true - e)) for e in _rh.eigenvalues) if _rh.n_found else 9e9
+results.append(check("and they are the right ones", _errh < 1e-10,
+                     f"max distance from a true eigenvalue = {_errh:.2e}"))
+results.append(check("eigenvectors stay complex",
+                     np.iscomplexobj(_rh.eigenvectors), str(_rh.eigenvectors.dtype)))
+
+_nonherm = sp.csr_matrix(_rng.standard_normal((6, 6)) + 1j * _rng.standard_normal((6, 6)))
+try:
+    feastpy.eigsh_interval(_nonherm, -1.0, 1.0, m0=4, uplo="F")
+    _refused = False
+except ValueError:
+    _refused = True
+results.append(check("complex non-Hermitian is refused, not guessed at", _refused))
+
+# The full subspace and the parameter array now come back.
+results.append(check("all M0 subspace slots are returned",
+                     _rh.all_eigenvalues is not None and len(_rh.all_eigenvalues) == 20,
+                     f"{len(_rh.all_eigenvalues)} slots for m0=20"))
+results.append(check("fpm is returned so the run can be reported",
+                     _rh.fpm is not None and _rh.fpm[29] != 0,
+                     f"fpm(30)={_rh.fpm[29]} (routine code)"))
 
 # --- contour and filter utilities --------------------------------------------
 # These drive the visualiser, and they are the routines whose C header
