@@ -117,9 +117,9 @@ All three are self-contained: unzip and run. No Python, no compilers, nothing.
 | Dense | ✅ | ✅ | ✅ | ✅ to 500×500 | Works everywhere |
 | Sparse, real symmetric | ✅ | ✅ | ✅ | ✅ to 5,000 | Works everywhere |
 | Sparse, complex Hermitian | ✅ | ✅ | ✅ | ✅ | **Fixed** — was silently solving the wrong matrix (see §8) |
-| Sparse polynomial | ✅ | ✅ | ✅ | ❌ | Works everywhere via the *iterative* routine. The calculator's page just doesn't offer it yet — the backend could. |
+| Sparse polynomial | ✅ | ✅ | ✅ | ❌ | In the app: `system5`, a quadratic problem solved directly rather than linearised. Marginal without MKL — it finds all 20 eigenvalues but how far the residual falls depends on the machine. |
 | Banded | ✅ | ✅ | ✅ | ❌ | Needs SPIKE. Now built and tested on **all four** CI platforms including Apple Silicon. |
-| Non-Hermitian (complex discs) | ✅ | ✅ | ✅ | ❌ | `feastpy` does it; the desktop app and calculator are interval-only, and complex spectra need a 2-D picture. |
+| Non-Hermitian (complex discs) | ✅ | ✅ | ✅ | ❌ | In the app: pick a non-Hermitian problem and the Spectrum tab becomes a complex plane with the search disc. The calculator is still interval-only. |
 | PFEAST (clusters) | builds, crashes | ✅ | untested | ❌ | For clusters. Meaningless in a browser. |
 
 ### The app's views, by platform
@@ -135,7 +135,7 @@ tests. The web calculator is a deliberately smaller thing.
 | Accuracy | ✅ | ✅ | ✅ | ❌ | **New.** Eigenvalue vs residual, with the rejected subspace slots shown hollow |
 | Eigenvector | ✅ | ✅ | ✅ | ❌ | **New.** Click an eigenvalue, see its eigenvector |
 | Convergence | ✅ | ✅ | ✅ | ❌ | Error per refinement loop |
-| Built-in problems | 11 | 13 | 13 | 2 | FEAST's own samples. Windows ships 11: benzene is 68 MB and excluded from the bundle |
+| Built-in problems | 13 | 13 | 13 | 2 | Every problem FEAST ships, benzene included. All 13 solve. |
 | Algorithm options + explanations | ✅ | ✅ | ✅ | ❌ | 19 options, each explained in plain English |
 
 **Why the web column is so much emptier.** Not capability — the calculator calls
