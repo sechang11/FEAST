@@ -431,8 +431,6 @@ def spectral_bounds(A, B=None) -> tuple[float, float]:
         try:
             blo = float(spla.eigsh(B, k=1, which="SA", return_eigenvectors=False,
                                    tol=1e-4)[0])
-            bhi = float(spla.eigsh(B, k=1, which="LA", return_eigenvectors=False,
-                                   tol=1e-4)[0])
         except Exception as exc:
             raise RuntimeError(
                 "could not bound the spectrum of B: " + str(exc)) from exc
@@ -442,8 +440,22 @@ def spectral_bounds(A, B=None) -> tuple[float, float]:
                 f"B is not positive definite (smallest eigenvalue ~ {blo:.3g}); "
                 "the generalized problem is not defined for it")
 
+        # These must be OUTER bounds or the enclosure is not one. eigsh is
+        # iterative and its tol is relative, so its answer can sit just inside
+        # the true extreme -- which is exactly how this returned an upper bound
+        # of 1.332 for a pencil whose true maximum is 1.333. Take B's upper
+        # bound from Gershgorin, which is strict by construction, and relax the
+        # iterative lower bound outward past its own tolerance.
+        _, bhi = _discs(B)
+        blo = blo * (1.0 - 1e-3)
+        bhi = max(bhi, blo)
+
         ratios = [a / b for a in (lo, hi) for b in (blo, bhi)]
         lo, hi = min(ratios), max(ratios)
+        # A final hair of slack absorbs the rounding in those divisions; the
+        # bound is loose by design, so widening it costs nothing.
+        span = max(abs(lo), abs(hi), 1e-30)
+        lo, hi = lo - 1e-9 * span, hi + 1e-9 * span
 
     if lo == hi:                      # degenerate (e.g. a multiple of identity)
         pad = max(abs(lo) * 1e-6, 1e-12)

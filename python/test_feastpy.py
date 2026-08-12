@@ -114,7 +114,13 @@ results.append(check("Gershgorin brackets the spectrum",
 Bg = sp.diags([np.full(N - 1, 0.5), np.full(N, 4.0), np.full(N - 1, 0.5)],
               [-1, 0, 1], format="csr")
 glo, ghi = feastpy.spectral_bounds(As, Bg)
-true_gen = np.linalg.eigvalsh(np.linalg.solve(Bg.toarray(), As.toarray()))
+# eigh(A, B), not eigvalsh(inv(B) @ A): B^-1 A is NOT symmetric, so eigvalsh
+# reads one triangle and returns numbers that are not the pencil's spectrum. It
+# agrees here only by accident of these two being symmetric Toeplitz matrices;
+# with a general symmetric B it reports negative eigenvalues for a pencil of two
+# positive-definite matrices, which is impossible.
+import scipy.linalg as _sla
+true_gen = _sla.eigh(As.toarray(), Bg.toarray(), eigvals_only=True)
 results.append(check("generalized bounds are sane",
                      glo <= true_gen.min() and ghi >= true_gen.max() and abs(ghi) < 1e4,
                      f"[{glo:.4g}, {ghi:.4g}] vs true [{true_gen.min():.4g}, {true_gen.max():.4g}]"))
