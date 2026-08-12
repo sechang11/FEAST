@@ -103,8 +103,16 @@ echo "installed: $DEST/libspike.a"
 # interfaces will not link and it is better to know now.
 echo
 echo "symbols FEAST's banded interfaces need:"
+# BSD nm (macOS) has no --defined-only -- it fails, prints nothing, and every
+# symbol then looks missing even though the archive is fine. Filter for the
+# text-section marker ourselves instead, which both nm variants emit.
+# Mach-O also prefixes symbols with an underscore, hence the leading _\?.
+# '|| true': this is a report, not a gate, and the script runs under set -e.
+# NF>=2 guard: nm separates each member with a blank line, and $(NF-1) on an
+# empty record is field -1, which is a hard error in awk, not an empty string.
+SYMS="$(nm -g "$DEST/libspike.a" 2>/dev/null | awk 'NF>=2 && $(NF-1)=="T" { print $NF }' || true)"
 for sym in spikeinit_ cspike_gbtrf_ zspike_gbtrf_ zspike_gbtrs_ zgbmm_ dsbmm_ zhbmm_; do
-  if nm -g --defined-only "$DEST/libspike.a" 2>/dev/null | grep -q " T .*$sym"; then
+  if printf '%s\n' "$SYMS" | grep -qx "_\?$sym"; then
     echo "  found   $sym"
   else
     echo "  MISSING $sym"

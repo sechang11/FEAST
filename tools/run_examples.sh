@@ -38,6 +38,22 @@ else
   SPIKE_LINK=""
 fi
 
+# `timeout` is GNU coreutils and does not exist on macOS, where every example
+# then "fails" with exit 127. Use gtimeout if the user has coreutils, else fall
+# back to a watchdog: run in the background, kill it if it outstays its welcome.
+if command -v timeout >/dev/null 2>&1;  then RUN_LIMITED() { timeout "$@"; }
+elif command -v gtimeout >/dev/null 2>&1; then RUN_LIMITED() { gtimeout "$@"; }
+else
+  RUN_LIMITED() {
+    local secs="$1"; shift
+    "$@" & local pid=$!
+    ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) & local watchdog=$!
+    wait "$pid"; local rc=$?
+    kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+    return $rc
+  }
+fi
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 cp "$EX"/*.mtx "$WORK"/ 2>/dev/null || true
@@ -79,7 +95,7 @@ for src in "$EX"/*.c "$EX"/*.f90; do
 
   # The examples read their matrices from the working directory.
   out="$WORK/$base.out"
-  if (cd "$WORK" && timeout 300 "./$base" >"$out" 2>&1); then
+  if (cd "$WORK" && RUN_LIMITED 300 "./$base" >"$out" 2>&1); then
     # FEAST prints "info" -- a nonzero value means it ran but did not succeed.
     if grep -qiE "info *[:=] *[^0 ]|FEAST OUTPUT INFO +[^0 ]" "$out"; then
       echo "  RAN-BAD-INFO  $name"
