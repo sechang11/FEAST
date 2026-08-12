@@ -436,6 +436,74 @@ class SpectrumView(QWidget):
         self.picked.emit(idx)
 
 
+class ComplexSpectrumView(QWidget):
+    """Eigenvalues in the complex plane, with the search disc drawn.
+
+    The interval plot cannot show these: a non-Hermitian matrix has eigenvalues
+    scattered across the plane, so "where are they" is a two-dimensional
+    question and the search region is a disc rather than a range.
+    """
+
+    picked = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setLayout(QVBoxLayout())
+        self.layout().setContentsMargins(4, 4, 4, 4)
+        self.plot = _plot("real part", "imaginary part")
+        self.plot.setAspectLocked(True)
+        self.layout().addWidget(self.plot, 1)
+        self.caption = QLabel("")
+        self.caption.setWordWrap(True)
+        self.caption.setStyleSheet(f"color: {MUTED};")
+        self.layout().addWidget(self.caption)
+        self._values = np.zeros(0, dtype=complex)
+
+    def show_search(self, centre: complex, radius: float, values=None,
+                    rejected=None):
+        self.plot.clear()
+        centre = complex(centre)
+
+        # The disc itself, so "inside" and "outside" are visible rather than
+        # something the user has to work out from coordinates.
+        t = np.linspace(0, 2 * np.pi, 240)
+        self.plot.plot(centre.real + radius * np.cos(t),
+                       centre.imag + radius * np.sin(t),
+                       pen=pg.mkPen(ACCEPT, width=1.5, style=Qt.DashLine))
+        self.plot.plot([centre.real], [centre.imag], pen=None, symbol="+",
+                       symbolSize=12, symbolBrush=MUTED, symbolPen=MUTED)
+
+        if rejected is not None and len(rejected):
+            rj = np.asarray(rejected, dtype=complex).ravel()
+            self.plot.plot(rj.real, rj.imag, pen=None, symbol="o",
+                           symbolSize=7, symbolBrush=None,
+                           symbolPen=pg.mkPen(REJECT, width=1.5))
+
+        vals = np.asarray(values, dtype=complex).ravel() if values is not None \
+            else np.zeros(0, dtype=complex)
+        self._values = vals
+        if len(vals):
+            pts = self.plot.plot(vals.real, vals.imag, pen=None, symbol="o",
+                                 symbolSize=9, symbolBrush=ACCEPT,
+                                 symbolPen=None)
+            pts.sigPointsClicked.connect(self._clicked)
+
+        msg = (f"{len(vals)} eigenvalue(s) inside the dashed search disc "
+               f"(centre {centre.real:g}{centre.imag:+g}i, radius {radius:g}).")
+        if rejected is not None and len(rejected):
+            msg += (f" Hollow markers are {len(rejected)} subspace slots FEAST "
+                    f"examined and rejected as outside it.")
+        self.caption.setText(msg)
+
+    def _clicked(self, _item, points):
+        if not len(points):
+            return
+        p = points[0].pos()
+        z = complex(p.x(), p.y())
+        if len(self._values):
+            self.picked.emit(int(np.argmin(np.abs(self._values - z))))
+
+
 class EigenvectorView(QWidget):
     """The eigenvector for a chosen eigenvalue.
 

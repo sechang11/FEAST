@@ -29,7 +29,8 @@ import licensing
 import feastpy
 from feastpy import (algorithms, codegen, contours, diagnostics, matrixio,
                      problems, results_io, runner)
-from views import EigenvectorView, FilterView, MatrixView, SpectrumView
+from views import (ComplexSpectrumView, EigenvectorView, FilterView,
+                   MatrixView, SpectrumView)
 
 APP_NAME = "FEAST Eigensolver"
 
@@ -400,6 +401,13 @@ class MainWindow(QMainWindow):
         # for a half-stored one silently discards half the problem. Neither
         # raises an error.
         self._uplo = "F"
+        # Which kind of search region is in force. A Hermitian matrix has real
+        # eigenvalues, so an interval on the real line finds them; a
+        # non-Hermitian one scatters them across the complex plane and needs a
+        # disc. This is a property of the matrix, not a user preference.
+        self._geometry = problems.INTERVAL
+        self._centre = complex(0.0, 0.0)
+        self._radius = 1.0
         self.bounds = None
         self.convergence = []
         self.diagnosis = None
@@ -527,6 +535,25 @@ class MainWindow(QMainWindow):
 
         params = QGroupBox("Parameters")
         pf = QFormLayout(params)
+        # Disc controls. Shown only for a non-Hermitian problem, because an
+        # interval is meaningless there and a disc is meaningless for a
+        # Hermitian one -- offering both at once would invite a nonsense run.
+        self.disc_box = QGroupBox("Search disc (complex plane)")
+        df = QFormLayout(self.disc_box)
+        self.emid_re = QDoubleSpinBox()
+        self.emid_im = QDoubleSpinBox()
+        self.radius = QDoubleSpinBox()
+        for w in (self.emid_re, self.emid_im, self.radius):
+            w.setDecimals(6)
+            w.setRange(-1e12, 1e12)
+        self.radius.setMinimum(1e-12)
+        self.radius.setValue(1.0)
+        df.addRow("Centre (real)", self.emid_re)
+        df.addRow("Centre (imag)", self.emid_im)
+        df.addRow("Radius", self.radius)
+        self.disc_box.setVisible(False)
+        lv.addWidget(self.disc_box)
+
         self.m0 = QSpinBox()
         self.m0.setRange(1, 100000)
         self.m0.setValue(40)
@@ -661,9 +688,18 @@ class MainWindow(QMainWindow):
         self.vector_view = EigenvectorView()
         self.accuracy_view.picked.connect(self._show_eigenvector)
 
+        # One tab, two plots: a real line for an interval search and an Argand
+        # plane for a disc search. Swapped by problem type rather than shown
+        # side by side, since only one is ever meaningful.
+        self.complex_view = ComplexSpectrumView()
+        self.complex_view.picked.connect(self._show_eigenvector)
+        self.spectrum_stack = QStackedWidget()
+        self.spectrum_stack.addWidget(self.plot)
+        self.spectrum_stack.addWidget(self.complex_view)
+
         self.tabs = QTabWidget()
         self.tabs.addTab(self.matrix_view, "Matrix")
-        self.tabs.addTab(self.plot, "Spectrum")
+        self.tabs.addTab(self.spectrum_stack, "Spectrum")
         self.tabs.addTab(self.filter_view, "Filter && contour")
         self.tabs.addTab(self.accuracy_view, "Accuracy")
         self.tabs.addTab(self.vector_view, "Eigenvector")
@@ -919,18 +955,19 @@ class MainWindow(QMainWindow):
                 continue
             header(group)
             for p in usable:
-                # Only interval searches are solvable here: a disc search needs
-                # a complex-plane region and the solve path takes Emin/Emax.
-                ok = (p.geometry == problems.INTERVAL)
+                # Both search geometries work now. The polynomial problem is
+                # the only one still out of reach: it needs three matrices and
+                # a routine family feastpy has no entry point for.
+                ok = p.solver is not None and p.id != "system5"
                 label = f"{p.title}  (n={p.n:,})"
                 combo.addItem(label, ("problem", p.id))
                 if not ok:
                     it = combo.model().item(combo.count() - 1)
                     it.setEnabled(False)
                     it.setToolTip(
-                        "Non-Hermitian: its eigenvalues are spread over the "
-                        "complex plane, so it needs a disc search. feastpy "
-                        "does this (eig_disc); this window is interval-only.")
+                        "A polynomial eigenvalue problem: it needs three "
+                        "matrices (A0, A1, A2) and a routine family feastpy "
+                        "does not wrap yet.")
 
         header("Generated")
         for name in matrixio.DEMOS:
@@ -964,6 +1001,7 @@ class MainWindow(QMainWindow):
             return
         self.problem_note.setText("")
         self._uplo = "F"
+        self._set_geometry(problems.INTERVAL)
         build, emin, emax = matrixio.DEMOS[name]
         built = build()
         # Demos backed by files on disk report their paths so generated code
@@ -1010,8 +1048,12 @@ class MainWindow(QMainWindow):
         # actually hold, which differs for the one problem carrying a Matrix
         # Market banner (scipy mirrors it).
         self._uplo = problems.effective_uplo(A, p.uplo)
-        self.emin.setValue(p.emin)
-        self.emax.setValue(p.emax)
+        if p.geometry == problems.DISC:
+            self._set_geometry(problems.DISC, p.emid, p.radius)
+        else:
+            self._set_geometry(problems.INTERVAL)
+            self.emin.setValue(p.emin)
+            self.emax.setValue(p.emax)
         self.m0.setValue(min(p.m0, A.shape[0]))
         self.matrix_label.setText(matrixio.describe(A))
 
@@ -1079,16 +1121,51 @@ class MainWindow(QMainWindow):
         """Feed a finished solve to the new views. Never fatal: a plot that
         cannot draw must not lose the user their result."""
         emin, emax = self.emin.value(), self.emax.value()
+        disc = (self._geometry == problems.DISC)
+
+        rejected = None
+        if r.all_eigenvalues is not None and r.n_found < len(r.all_eigenvalues):
+            rejected = r.all_eigenvalues[r.n_found:]
+            keep = np.isfinite(np.abs(rejected)) & (np.abs(rejected) < 1e30)
+            rejected = rejected[keep]
+
+        if disc:
+            try:
+                self.complex_view.show_search(self._centre, self._radius,
+                                              r.eigenvalues, rejected)
+            except Exception as exc:
+                self._log(f"complex spectrum view unavailable: {exc}")
+            try:
+                self.filter_view.show_disc(self._centre, self._radius,
+                                           r.eigenvalues)
+            except Exception as exc:
+                self._log(f"filter view unavailable: {exc}")
+            try:
+                self.vector_view.set_result(r.eigenvalues, r.eigenvectors)
+            except Exception as exc:
+                self._log(f"eigenvector view unavailable: {exc}")
+            try:
+                # Distance from the disc centre is the honest 1-D stand-in for
+                # position when the eigenvalues are spread over a plane.
+                d = np.abs(np.asarray(r.eigenvalues, dtype=complex)
+                           - self._centre)
+                tol = 10.0 ** (-self.tol.value())
+                self.accuracy_view.show_result(d, r.residuals, 0.0,
+                                               self._radius, tol=tol)
+                self.accuracy_view.plot.setLabel("bottom",
+                                                 "distance from disc centre")
+            except Exception as exc:
+                self._log(f"accuracy view unavailable: {exc}")
+            return
+
+        self.accuracy_view.plot.setLabel("bottom", "eigenvalue")
         try:
             # The subspace slots FEAST examined and rejected as outside the
             # interval. Showing them is how "is M0 big enough" stops being
             # folklore: if none were rejected, the subspace was full to the brim.
-            rej = rej_res = None
-            if r.all_eigenvalues is not None and r.n_found < len(r.all_eigenvalues):
-                rej = r.all_eigenvalues[r.n_found:]
-                rej_res = r.all_residuals[r.n_found:]
-                keep = np.isfinite(rej) & (np.abs(rej) < 1e30)
-                rej, rej_res = rej[keep], rej_res[keep]
+            rej = rejected
+            rej_res = (r.all_residuals[r.n_found:][:len(rej)]
+                       if rej is not None else None)
             tol = 10.0 ** (-self.tol.value()) if hasattr(self, "tol") else None
             self.accuracy_view.show_result(np.real(r.eigenvalues), r.residuals,
                                            emin, emax, rej, rej_res, tol)
@@ -1117,6 +1194,38 @@ class MainWindow(QMainWindow):
     def _show_eigenvector(self, idx: int):
         self.vector_view.show_index(idx)
         self.tabs.setCurrentWidget(self.vector_view)
+
+    def _set_geometry(self, geometry: str, centre=None, radius=None):
+        """Put the whole window into interval mode or disc mode."""
+        self._geometry = geometry
+        disc = (geometry == problems.DISC)
+        if centre is not None:
+            self._centre = complex(centre)
+            self.emid_re.setValue(self._centre.real)
+            self.emid_im.setValue(self._centre.imag)
+        if radius is not None:
+            self._radius = float(radius)
+            self.radius.setValue(self._radius)
+
+        # FEAST's own default point count differs by geometry: 8 on a
+        # Hermitian half-contour, 16 on a full one, because a closed contour in
+        # the plane has no conjugate symmetry to exploit. Carrying 8 into a
+        # disc search starts it under-resourced and it often fails to converge.
+        if disc and self.contour.value() == 8:
+            self.contour.setValue(16)
+        elif not disc and self.contour.value() == 16:
+            self.contour.setValue(8)
+
+        self.disc_box.setVisible(disc)
+        # The interval controls drive a solve that cannot run in disc mode, so
+        # hide them rather than leave them live and ignored.
+        for w in (self.emin, self.emax, self.full_range_btn, self.count_btn,
+                  self.fit_btn, self.zoom_out_btn):
+            w.setEnabled(not disc)
+        self.spectrum_stack.setCurrentWidget(
+            self.complex_view if disc else self.plot)
+        if disc:
+            self.complex_view.show_search(self._centre, self._radius)
 
     def _refresh_matrix_view(self, title: str):
         try:
@@ -1289,23 +1398,32 @@ class MainWindow(QMainWindow):
             return
 
         params = dict(
-            emin=self.emin.value(),
-            emax=self.emax.value(),
             m0=self.m0.value(),
             contour_points=self.contour.value(),
             tol_exponent=self.tol.value(),
             max_loops=self.loops.value(),
-            rule=self.rule.currentData(),
             # The built-in problems declare how their file is stored; a matrix
             # opened from disk is assumed full. Getting this wrong silently
             # discards half the matrix, so it is threaded explicitly.
             uplo=getattr(self, "_uplo", "F"),
         )
+        if self._geometry == problems.DISC:
+            self._centre = complex(self.emid_re.value(), self.emid_im.value())
+            self._radius = self.radius.value()
+            params["center"] = self._centre
+            params["radius"] = self._radius
+        else:
+            params["emin"] = self.emin.value()
+            params["emax"] = self.emax.value()
+            # fpm(16) is only wired through the interval routines so far.
+            params["rule"] = self.rule.currentData()
         if not self.solving:          # a fresh solve, not an auto-retry
             self.convergence = []
             self.conv_plot.clear()
-        self._log(f"solving on [{params['emin']:g}, {params['emax']:g}] "
-                  f"with M0={params['m0']}...")
+        where = (f"disc centre {self._centre.real:g}{self._centre.imag:+g}i "
+                 f"radius {self._radius:g}" if self._geometry == problems.DISC
+                 else f"[{params['emin']:g}, {params['emax']:g}]")
+        self._log(f"solving on {where} with M0={params['m0']}...")
         self._set_solving(True)
         self.statusBar().showMessage("solving...")
 
@@ -1411,9 +1529,16 @@ class MainWindow(QMainWindow):
                 'Try "Use whole spectrum", or "How many are in here?" to find '
                 "where they are.")
         self.table.setRowCount(r.n_found)
+        # A disc search returns complex eigenvalues; "%.12g" on a complex
+        # number raises, so format the two parts explicitly.
+        def _fmt(v):
+            if np.iscomplexobj(r.eigenvalues):
+                return f"{v.real:.12g} {'+' if v.imag >= 0 else '-'} {abs(v.imag):.12g}i"
+            return f"{v:.12g}"
+
         for i in range(r.n_found):
             for col, text in ((0, str(i + 1)),
-                              (1, f"{r.eigenvalues[i]:.12g}"),
+                              (1, _fmt(r.eigenvalues[i])),
                               (2, f"{r.residuals[i]:.3e}")):
                 item = QTableWidgetItem(text)
                 if col:
@@ -1422,7 +1547,7 @@ class MainWindow(QMainWindow):
 
         self.plot.clear()
         self.plot.addItem(self.region)      # clear() drops it otherwise
-        if r.n_found:
+        if r.n_found and not np.iscomplexobj(r.eigenvalues):
             self.plot.plot(r.eigenvalues, np.arange(1, r.n_found + 1),
                            pen=None, symbol="o", symbolSize=7,
                            symbolBrush=(70, 130, 220))

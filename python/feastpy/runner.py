@@ -41,14 +41,23 @@ CHILD_ENV_FLAG = "FEASTPY_SOLVE_CHILD"
 
 
 def solve_blocking(A, B, params: dict):
-    """Run a solve in this process. Returns (FeastResult, seconds)."""
+    """Run a solve in this process. Returns (FeastResult, seconds).
+
+    The search region picks the routine family. `emin`/`emax` means a Hermitian
+    interval on the real line; `center`/`radius` means a disc in the complex
+    plane, which is what a non-Hermitian or complex-symmetric matrix needs
+    because its eigenvalues do not lie on a line at all.
+    """
     import scipy.sparse as sp
 
     from . import solver
 
     t0 = time.perf_counter()
-    fn = solver.eigsh_interval if sp.issparse(A) else solver.eigh_interval
-    r = fn(A, B=B, **params)
+    if "center" in params:
+        r = solver.eig_disc(A, B=B, **params)
+    else:
+        fn = solver.eigsh_interval if sp.issparse(A) else solver.eigh_interval
+        r = fn(A, B=B, **params)
     return r, time.perf_counter() - t0
 
 

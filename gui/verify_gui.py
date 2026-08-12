@@ -31,6 +31,47 @@ def finish():
     app.exit(1 if failures else 0)
 
 
+def check_disc():
+    """A non-Hermitian problem: complex eigenvalues, so a disc, not an interval.
+
+    Run synchronously against feastpy rather than through the worker thread --
+    this asserts the geometry plumbing (which routine, which search region,
+    which plot) without a second async solve in the harness.
+    """
+    print("\ndisc search:")
+    import numpy as np
+    from feastpy import problems, runner
+
+    p = problems.get("system4")
+    if not problems.available(p):
+        print("  SKIP  disc search (system4 matrix not present)")
+        return
+    A, B = problems.load(p)
+    params = dict(m0=p.m0, contour_points=16, tol_exponent=12, max_loops=20,
+                  uplo=problems.effective_uplo(A, p.uplo),
+                  center=p.emid, radius=p.radius)
+    r, _ = runner.solve_blocking(A, B, params)
+    check("disc search dispatches to a complex routine",
+          r.routine.startswith(("zfeast", "zifeast")), r.routine)
+    check("disc search converges", r.info == 0 and r.n_found > 0,
+          f"info={r.info} found={r.n_found}")
+    check("eigenvalues are complex", np.iscomplexobj(r.eigenvalues),
+          str(r.eigenvalues.dtype))
+    d = np.abs(np.asarray(r.eigenvalues, complex) - complex(p.emid))
+    check("and they all lie inside the search disc",
+          bool((d <= p.radius + 1e-9).all()), f"max distance {d.max():.4f}")
+
+    # The complex-plane view must accept them without a real-axis assumption.
+    try:
+        from views import ComplexSpectrumView
+        v = ComplexSpectrumView()
+        v.show_search(p.emid, p.radius, r.eigenvalues)
+        check("complex spectrum view renders them", True,
+              f"{r.n_found} points")
+    except Exception as exc:
+        check("complex spectrum view renders them", False, str(exc)[:60])
+
+
 def check(name, ok, detail=""):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}{'  ' + detail if detail else ''}")
     if not ok:
@@ -347,6 +388,7 @@ def _poll():
                   f"after {state['attempts']} fix(es), found={r.n_found}")
             check("and finds the expected 9 eigenvalues", r.n_found == 9,
                   f"found={r.n_found}")
+            check_disc()
             finish()
             return
 
@@ -357,6 +399,7 @@ def _poll():
         if not fixes or state["attempts"] >= 3:
             check("the suggested fixes resolve the problem", False,
                   f"gave up at info={r.info} after {state['attempts']} fix(es)")
+            check_disc()
             finish()
             return
 
