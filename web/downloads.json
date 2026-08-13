@@ -9,7 +9,8 @@
     "",
     "Set 'file' to null for a platform that has not been published yet; the page",
     "then shows it as built-and-tested but not yet downloadable, rather than",
-    "offering a link that 404s."
+    "offering a link that 404s.",
+    "'notice' is shown above the table -- use it for a host-specific caveat, e.g. Google Drive showing a virus-scan warning on files over 100 MB."
   ],
   "version": "0.1.0",
   "released": "",
@@ -40,5 +41,6 @@
       "file": null,
       "size": ""
     }
-  ]
+  ],
+  "notice": ""
 }

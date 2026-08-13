@@ -289,6 +289,10 @@ def _download_table() -> str:
     if cfg.get("version"):
         when = f" &mdash; {cfg['released']}" if cfg.get("released") else ""
         head = f"<p>Current version <strong>{cfg['version']}</strong>{when}.</p>"
+    # A host-specific caveat, e.g. Google Drive interrupting large downloads
+    # with a virus-scan warning. Better said up front than discovered.
+    if cfg.get("notice"):
+        head += f'<p class="note">{cfg["notice"]}</p>'
     tail = ""
     if not any_link:
         tail = (f'<p class="note">Builds exist and are tested on every platform '
