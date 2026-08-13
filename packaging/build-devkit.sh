@@ -75,6 +75,7 @@ cp "$ROOT"/tools/run_examples.sh "$ROOT"/tools/run_pfeast_examples.sh "$STAGE/to
 cp "$ROOT"/build/build-feast.sh "$ROOT"/build/build-spike.sh \
    "$ROOT"/build/build-pfeast.sh "$ROOT"/build/run-test.sh "$STAGE/build/"
 cp "$ROOT"/build/spike_blas_compat.f90 "$ROOT"/build/msmpi_inplace_compat.c \
+   "$ROOT"/build/mkl_gfortran_abi_compat.c \
    "$STAGE/build/" 2>/dev/null || true
 
 # The full-feature variant carries MKL's runtime alongside the libraries.
