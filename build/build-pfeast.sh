@@ -95,6 +95,20 @@ for s in $SOURCES; do
   OBJECTS="$OBJECTS $OBJ/$o"
 done
 
+# On Windows with gfortran + MS-MPI, MPI_ALLREDUCE(MPI_IN_PLACE, ...) --
+# which PFEAST calls at 222 sites -- silently reduces garbage instead of the
+# buffer: MS-MPI recognises the Fortran sentinel by the ADDRESS of a variable
+# in COMMON /MPIPRIV1/ that only Intel Fortran imports from the DLL (the
+# !DEC$ DLLIMPORT directive; gfortran ignores it and allocates its own).
+# msmpi_inplace_compat.c intercepts the call and swaps the program-local
+# sentinel for the C MPI_IN_PLACE. See the file for the full story.
+if [ "$OS" = windows ]; then
+  echo "  CC   msmpi_inplace_compat.c  (MPI_IN_PLACE translation for MS-MPI)"
+  CC_BIN="${CC:-gcc}"
+  "$CC_BIN" -O2 -c "$HERE/msmpi_inplace_compat.c" -o "$OBJ/msmpi_inplace_compat.o"       ${MPI_INC:+-I$MPI_INC}
+  OBJECTS="$OBJECTS $OBJ/msmpi_inplace_compat.o"
+fi
+
 echo
 echo "  AR  libpfeast.a"
 rm -f "$LIB/libpfeast.a"
