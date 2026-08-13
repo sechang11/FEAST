@@ -5,7 +5,9 @@
 #
 # PFEAST parallelises on three levels: L1 (search intervals), L2 (contour
 # points) and L3 (the linear system). The example directories are named for the
-# levels they exercise. Banded examples are skipped -- they need SPIKE.
+# levels they exercise. Banded examples need SPIKE, and several examples in
+# these directories call the serial interfaces from inside an MPI program, so
+# libfeast and libspike are linked in when they are present.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,6 +32,13 @@ RUN_TIMEOUT="${RUN_TIMEOUT:-300}"
 LIB="$ROOT/4.0/lib/$ARCH/libpfeast.a"
 SPIKE_LIB=""
 [ -f "$ROOT/4.0/lib/$ARCH/libspike.a" ] && SPIKE_LIB="$ROOT/4.0/lib/$ARCH/libspike.a"
+# Several examples in the PFEAST directories call the SERIAL interfaces from
+# inside an MPI program -- PF90banded_dfeast_sbgv, for instance, references
+# dfeast_sbgv_, not a p-prefixed routine. Those need libfeast alongside
+# libpfeast, and without it they fail to link with an undefined symbol that
+# looks like a PFEAST problem and is not one.
+FEAST_LIB=""
+[ -f "$ROOT/4.0/lib/$ARCH/libfeast.a" ] && FEAST_LIB="$ROOT/4.0/lib/$ARCH/libfeast.a"
 INC="$ROOT/4.0/include"
 BLAS="${BLAS_LIBS:--lopenblas}"
 
@@ -80,11 +89,11 @@ for dir in "$ROOT"/4.0/example/PFEAST-*; do
     bin="$WORK/$base"
     if [[ "$name" == *.c ]]; then
       "$MPICC" -O2 -c "$src" -o "$bin.o" -I"$INC" ${MPI_INC:+-I$MPI_INC} 2>"$WORK/$base.build" \
-        && "$MPIFC" -o "$bin" "$bin.o" "$LIB" ${SPIKE_LIB} $BLAS -fopenmp -lm \
+        && "$MPIFC" -o "$bin" "$bin.o" "$LIB" ${FEAST_LIB} ${SPIKE_LIB} $BLAS -fopenmp -lm \
              2>>"$WORK/$base.build"
     else
       "$MPIFC" -O2 -ffree-line-length-none ${MPI_INC:+-I$MPI_INC} \
-        -o "$bin" "$src" "$LIB" ${SPIKE_LIB} $BLAS -fopenmp \
+        -o "$bin" "$src" "$LIB" ${FEAST_LIB} ${SPIKE_LIB} $BLAS -fopenmp \
         2>"$WORK/$base.build"
     fi
     if [ ! -x "$bin" ]; then
