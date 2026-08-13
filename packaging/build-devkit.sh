@@ -47,6 +47,15 @@ cp "$ROOT"/build/build-feast.sh "$ROOT"/build/build-spike.sh \
 cp "$ROOT"/build/spike_blas_compat.f90 "$ROOT"/build/msmpi_inplace_compat.c \
    "$STAGE/build/" 2>/dev/null || true
 
+# The full-feature variant carries MKL's runtime alongside the libraries.
+# Intel's Simplified Software License permits redistributing the runtime, and
+# "the direct solver exists on this platform" is exactly the feature the
+# variant is for -- so the kit must work on a machine with no MKL installed.
+if [ -n "${MKL_LIB_DIR:-}" ] && [ -d "${MKL_LIB_DIR}" ]; then
+  echo "  bundling MKL runtime from $MKL_LIB_DIR"
+  cp "$MKL_LIB_DIR"/libmkl*.dylib "$STAGE/lib/" 2>/dev/null     || cp "$MKL_LIB_DIR"/libmkl*.so* "$STAGE/lib/" 2>/dev/null || true
+fi
+
 cp "$ROOT"/BUILDING.md "$ROOT"/BUILDING-COMPLETE.md "$ROOT"/COMPATIBILITY.md \
    "$STAGE/doc/" 2>/dev/null || true
 cp "$ROOT"/packaging/README-DEVKIT.md "$STAGE/README.md"

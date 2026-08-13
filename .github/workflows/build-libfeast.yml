@@ -316,6 +316,57 @@ jobs:
           if-no-files-found: error
           compression-level: 0        # already compressed
 
+  # The full-feature proof: FEAST with MKL 2021.4 on macOS Intel. This is the
+  # configuration in which upstream's own examples go 36/36 -- the direct
+  # PARDISO solver is what the two polynomial examples need -- and, because
+  # MKL 2021 predates Intel's Rosetta block, the same binaries are the route
+  # to 100% of the original's features on Apple Silicon (translated).
+  # continue-on-error: a red here must not gate the ordinary builds.
+  macos-x64-mkl:
+    name: macos-x64 + MKL (full-feature)
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain + MKL 2021.4
+        run: |
+          brew install gcc
+          FC_BIN="$(ls "$(brew --prefix)"/bin/gfortran-* | sort -V | tail -1)"
+          echo "FC=$FC_BIN" >> $GITHUB_ENV
+          curl -Ls "micro.mamba.pm/api/micromamba/osx-64/latest" | tar -xvj bin/micromamba
+          ./bin/micromamba create -y -p "$PWD/mklenv" -c conda-forge "mkl=2021.4"
+          ls "$PWD/mklenv/lib" | grep -c "^libmkl" | xargs echo "mkl dylibs:"
+
+      - name: Build (SPIKE + FEAST against MKL)
+        run: |
+          # zdotc/cdotc ABI shim: gfortran's complex return vs intel_lp64's
+          # hidden pointer. See build/mkl_gfortran_abi_compat.c.
+          cc -O2 -c build/mkl_gfortran_abi_compat.c -o mkl_abi.o
+          MKL="$PWD/mklenv/lib"
+          export BLAS_LIBS="$PWD/mkl_abi.o -L$MKL -lmkl_intel_lp64 -lmkl_sequential -lmkl_core -lpthread -lm -ldl"
+          echo "BLAS_LIBS=$BLAS_LIBS" >> $GITHUB_ENV
+          echo "DYLD_LIBRARY_PATH=$MKL" >> $GITHUB_ENV
+          bash build/build-spike.sh --arch macos-x64-mkl
+          bash build/build-feast.sh --arch macos-x64-mkl --mkl --spike
+          bash build/run-test.sh macos-x64-mkl
+
+      - name: All 36 examples must pass with the direct solver
+        run: |
+          bash tools/run_examples.sh macos-x64-mkl | tee examples.log || true
+          grep -q "passed 36, failed 0" examples.log             || { echo "expected 36/36 with MKL"; exit 1; }
+
+      - name: Developer Kit (full-feature, MKL bundled)
+        run: MKL_LIB_DIR="$PWD/mklenv/lib" bash packaging/build-devkit.sh macos-x64-mkl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FEAST-devkit-macos-x64-mkl
+          path: FEAST-devkit-macos-x64-mkl.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
   universal:
     name: macos-universal
     needs: build
