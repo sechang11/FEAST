@@ -13,34 +13,34 @@
     "'notice' is shown above the table -- use it for a host-specific caveat, e.g. Google Drive showing a virus-scan warning on files over 100 MB."
   ],
   "version": "0.1.0",
-  "released": "",
+  "released": "2026-08-12",
   "base": "https://github.com/sechang11/FEAST/releases/download/v0.1.0/",
   "releases_page": "https://github.com/sechang11/FEAST/releases",
   "platforms": [
     {
       "name": "Windows x64",
-      "note": "Windows 10 or later. Unzip and run FEAST.exe.",
-      "file": null,
-      "size": "138 MB"
+      "note": "Windows 10 or later. Use Extract All, then run FEAST.exe.",
+      "file": "https://drive.google.com/file/d/12oxwZqJ5IR6VvHiaCB8a99yjtDzAvxNA/view?usp=sharing",
+      "size": "143 MB"
     },
     {
       "name": "macOS (Apple Silicon)",
-      "note": "M1 and later. Unzip and open FEAST.app.",
-      "file": null,
-      "size": ""
+      "note": "M1 and later. tar -xzf, then right-click FEAST.app and choose Open.",
+      "file": "https://drive.google.com/file/d/1MNkL9CKViR6FdVAX1RnQf0thmU3J6ian/view?usp=sharing",
+      "size": "99 MB"
     },
     {
       "name": "macOS (Intel)",
-      "note": "Unzip and open FEAST.app.",
-      "file": null,
-      "size": ""
+      "note": "tar -xzf, then right-click FEAST.app and choose Open.",
+      "file": "https://drive.google.com/file/d/1-GpazlO6qXJHew1C26kyenNKojRpIcLQ/view?usp=sharing",
+      "size": "107 MB"
     },
     {
       "name": "Linux x64",
-      "note": "Unpack and run ./FEAST. glibc 2.35 or later.",
-      "file": null,
-      "size": ""
+      "note": "tar -xzf, then ./FEAST. glibc 2.35 or later.",
+      "file": "https://drive.google.com/file/d/19x4V5J0ckDiAg0nOmGu3qslcfMGHeE5M/view?usp=sharing",
+      "size": "171 MB"
     }
   ],
-  "notice": ""
+  "notice": "These builds are hosted on Google Drive while a permanent home is set up. Drive cannot virus-scan files this large, so it shows a warning page first &mdash; choose <em>Download anyway</em>. For the same reason <code>curl</code> and <code>wget</code> will fetch that warning page rather than the file; use a browser."
 }
