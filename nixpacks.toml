@@ -16,6 +16,10 @@ cmds = [
   "bash build/run-test.sh linux-x64",
   "python -m pip install --upgrade pip",
   "python -m pip install -r requirements.txt",
+  # The site's HTML is generated from build_site.py and is NOT committed --
+  # web/static/*.html is gitignored. Without this the deploy serves a static
+  # directory holding only CSS and JS, and every page is a bare 404.
+  "python web/build_site.py",
 ]
 
 [start]
