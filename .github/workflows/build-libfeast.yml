@@ -432,16 +432,20 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-python-pip
             make
+      # git-bash and the runner's native Python, not msys2's: the MSYS2 python
+      # is a mingw-platform build, so pip refuses the win_amd64 wheel outright.
       - name: Fetch MKL 2021.4 (the pip wheel carries the DLLs)
+        shell: bash
         run: |
           python -m pip download "mkl==2021.4.0" --no-deps -d mklwheel
-          cd mklwheel && python - <<'PY'
+          python -c "
           import zipfile, glob
-          z = zipfile.ZipFile(glob.glob("*.whl")[0])
+          z = zipfile.ZipFile(glob.glob('mklwheel/*.whl')[0])
           for n in z.namelist():
-              if "/bin/" in n and n.endswith(".dll"):
-                  z.extract(n, ".")
-          PY
+              if '/bin/' in n and n.endswith('.dll'):
+                  z.extract(n, 'mklwheel')
+          print('extracted')
+          "
           ls mklwheel/mkl-2021.4.0.data/data/Library/bin | head -3
       - name: Build (SPIKE + FEAST against mkl_rt)
         run: |
