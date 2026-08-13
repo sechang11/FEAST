@@ -18,11 +18,24 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Supersede in-flight runs on the same branch. Without this, a run of pushes
+# leaves several runs competing for the macos-15-intel pool, which is scarce
+# enough that jobs sit queued until they are cancelled -- so the newest run,
+# the one you actually want artifacts from, is the one that loses. Cancelling
+# the older runs deliberately is both faster and cheaper than letting them
+# fight. `-mkl` jobs are covered too: they are part of the same run.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # 45 was not enough once the PFEAST examples joined: the macOS Intel
+    # runner is the slowest of the four and its job was cancelled at the cap
+    # three times, which reads as infrastructure flakiness and is not.
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -167,7 +180,11 @@ jobs:
       - name: Run PFEAST examples (Unix)
         if: runner.os != 'Windows'
         continue-on-error: true
-        run: RUN_TIMEOUT=420 bash tools/run_pfeast_examples.sh ${{ matrix.arch }} 2 || true
+        # 420s x 44 examples is an hour in the worst case. This run is
+        # informational -- the authoritative numbers are the measured ones in
+        # COMPATIBILITY.md -- so cap it low enough to stay a check rather than
+        # become the job.
+        run: RUN_TIMEOUT=150 bash tools/run_pfeast_examples.sh ${{ matrix.arch }} 2 || true
 
       # The Developer Kit: libfeast+libspike+libpfeast, headers, all 80
       # upstream examples, runners and build scripts with the shims. Built
