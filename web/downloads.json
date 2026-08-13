@@ -42,5 +42,49 @@
       "size": "171 MB"
     }
   ],
-  "notice": "These builds are hosted on Google Drive while a permanent home is set up. Drive cannot virus-scan files this large, so it shows a warning page first &mdash; choose <em>Download anyway</em>. For the same reason <code>curl</code> and <code>wget</code> will fetch that warning page rather than the file; use a browser."
+  "notice": "These builds are hosted on Google Drive while a permanent home is set up. Drive cannot virus-scan files this large, so it shows a warning page first &mdash; choose <em>Download anyway</em>. For the same reason <code>curl</code> and <code>wget</code> will fetch that warning page rather than the file; use a browser.",
+  "devkits": [
+    {
+      "name": "Developer Kit \u2014 Windows x64",
+      "note": "libfeast + libspike + libpfeast, headers, all 80 examples. ~5 MB.",
+      "file": null,
+      "size": ""
+    },
+    {
+      "name": "Developer Kit \u2014 Linux x64",
+      "note": "Same contents, Linux build. ~5 MB.",
+      "file": null,
+      "size": ""
+    },
+    {
+      "name": "Developer Kit \u2014 macOS Apple Silicon",
+      "note": "Same contents, native arm64. ~5 MB.",
+      "file": null,
+      "size": ""
+    },
+    {
+      "name": "Developer Kit \u2014 macOS Intel",
+      "note": "Same contents, x86_64. ~5 MB.",
+      "file": null,
+      "size": ""
+    },
+    {
+      "name": "Full-feature Kit \u2014 Windows x64 (MKL)",
+      "note": "MKL 2021.4 bundled: direct PARDISO solver, all 36 upstream examples pass.",
+      "file": null,
+      "size": "222 MB"
+    },
+    {
+      "name": "Full-feature Kit \u2014 Linux x64 (MKL)",
+      "note": "MKL 2021.4 bundled: 36/36.",
+      "file": null,
+      "size": "374 MB"
+    },
+    {
+      "name": "Full-feature Kit \u2014 macOS Intel (MKL)",
+      "note": "MKL 2021.4 bundled: 36/36 natively; on Apple Silicon runs under Rosetta 2 (measured).",
+      "file": null,
+      "size": "261 MB"
+    }
+  ]
 }

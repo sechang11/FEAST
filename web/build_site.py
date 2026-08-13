@@ -293,6 +293,31 @@ def _download_table() -> str:
     # with a virus-scan warning. Better said up front than discovered.
     if cfg.get("notice"):
         head += f'<p class="note">{cfg["notice"]}</p>'
+    # Second table: the Developer Kits, when configured. Same rules.
+    dk = cfg.get("devkits", [])
+    dk_rows = []
+    for p_ in dk:
+        f = p_.get("file")
+        if f:
+            url = f if f.startswith("http") else base + f
+            size = f" <span class=\"muted\">({p_['size']})</span>" if p_.get("size") else ""
+            cell = f'<a class="button" href="{url}">Download</a>{size}'
+        else:
+            cell = '<span class="muted">not published yet</span>'
+        dk_rows.append(f"<tr><td><strong>{p_['name']}</strong><br>"
+                       f"<span class=\"muted\">{p_.get('note','')}</span></td>"
+                       f"<td>{cell}</td></tr>")
+    dk_html = ""
+    if dk_rows:
+        dk_html = ("<h2>Developer Kits</h2>"
+                   "<p>For people who link FEAST into their own code: the "
+                   "libraries (serial, banded/SPIKE, and MPI/PFEAST), the "
+                   "headers, all 80 of upstream's examples, and the build "
+                   "scripts with every portability fix already applied. The "
+                   "<strong>full-feature</strong> kits bundle Intel MKL 2021.4 "
+                   "and pass all 36 upstream examples, direct solver "
+                   "included.</p><table>" + "".join(dk_rows) + "</table>")
+
     tail = ""
     if not any_link:
         tail = (f'<p class="note">Builds exist and are tested on every platform '
@@ -300,7 +325,7 @@ def _download_table() -> str:
                 f'produced by CI on every change and can be fetched from the '
                 f'<a href="{cfg.get("releases_page", "#")}">releases page</a> '
                 f'once published.</p>')
-    return head + "<table>" + "".join(rows) + "</table>" + tail
+    return head + "<table>" + "".join(rows) + "</table>" + dk_html + tail
 
 
 DOWNLOAD = """
