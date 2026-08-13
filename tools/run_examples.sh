@@ -13,6 +13,10 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
+# Run from the repository or from inside a Developer Kit: the repo keeps
+# everything under 4.0/, the kit flattens to lib/ example/ include/. Detect
+# rather than assume, so the kit can test itself on a machine with no repo.
+if [ -d "$ROOT/4.0" ]; then BASE="$ROOT/4.0"; else BASE="$ROOT"; fi
 FC="${FC:-gfortran}"
 
 case "$(uname -s)" in
@@ -23,14 +27,14 @@ case "$(uname -s)" in
 esac
 case "$(uname -m)" in arm64|aarch64) MACH=arm64 ;; *) MACH=x64 ;; esac
 ARCH="${1:-$OS-$MACH}"
-LIB="$ROOT/4.0/lib/$ARCH/libfeast.a"
-INC="$ROOT/4.0/include"
-EX="$ROOT/4.0/example/FEAST"
+LIB="$BASE/lib/$ARCH/libfeast.a"
+INC="$BASE/include"
+EX="$BASE/example/FEAST"
 
 [ -f "$LIB" ] || { echo "no $LIB -- run build/build-feast.sh first" >&2; exit 1; }
 
 # Banded needs SPIKE. If a libspike.a sits beside libfeast.a, run those too.
-SPIKE="$ROOT/4.0/lib/$ARCH/libspike.a"
+SPIKE="$BASE/lib/$ARCH/libspike.a"
 if [ -f "$SPIKE" ]; then
   SPIKE_LINK="$SPIKE"
   echo "SPIKE found: banded examples will be attempted"

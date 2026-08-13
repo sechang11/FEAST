@@ -36,6 +36,16 @@ cp "$LIBDIR"/libpfeast.a  "$STAGE/lib/" 2>/dev/null || true
 
 cp "$ROOT"/4.0/include/*.h "$STAGE/include/"
 
+# The accuracy test driver, prebuilt. This is what lets the kit prove itself
+# on a machine with no compiler at all -- including an Apple Silicon Mac
+# running the Intel kit under Rosetta, where no x86_64 toolchain exists.
+mkdir -p "$STAGE/bin"
+if [ -x "$ROOT/build/test_feast" ]; then
+  cp "$ROOT/build/test_feast" "$STAGE/bin/"
+elif [ -x "$ROOT/build/test_feast.exe" ]; then
+  cp "$ROOT/build/test_feast.exe" "$STAGE/bin/"
+fi
+
 # Upstream's examples, unmodified, plus the runners that drive them.
 cp -r "$ROOT/4.0/example" "$STAGE/example"
 cp "$ROOT"/tools/run_examples.sh "$ROOT"/tools/run_pfeast_examples.sh "$STAGE/tools/"
@@ -53,7 +63,7 @@ cp "$ROOT"/build/spike_blas_compat.f90 "$ROOT"/build/msmpi_inplace_compat.c \
 # variant is for -- so the kit must work on a machine with no MKL installed.
 if [ -n "${MKL_LIB_DIR:-}" ] && [ -d "${MKL_LIB_DIR}" ]; then
   echo "  bundling MKL runtime from $MKL_LIB_DIR"
-  cp "$MKL_LIB_DIR"/libmkl*.dylib "$STAGE/lib/" 2>/dev/null     || cp "$MKL_LIB_DIR"/libmkl*.so* "$STAGE/lib/" 2>/dev/null || true
+  cp "$MKL_LIB_DIR"/libmkl*.dylib "$STAGE/lib/" 2>/dev/null     || cp "$MKL_LIB_DIR"/libmkl*.so* "$STAGE/lib/" 2>/dev/null     || cp "$MKL_LIB_DIR"/*.dll "$STAGE/lib/" 2>/dev/null || true
 fi
 
 cp "$ROOT"/BUILDING.md "$ROOT"/BUILDING-COMPLETE.md "$ROOT"/COMPATIBILITY.md \

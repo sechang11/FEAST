@@ -12,6 +12,10 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
+# Run from the repository or from inside a Developer Kit: the repo keeps
+# everything under 4.0/, the kit flattens to lib/ example/ include/. Detect
+# rather than assume, so the kit can test itself on a machine with no repo.
+if [ -d "$ROOT/4.0" ]; then BASE="$ROOT/4.0"; else BASE="$ROOT"; fi
 ARCH="${1:-linux-x64}"
 NP="${2:-2}"
 MPIFC="${MPIFC:-mpif90}"
@@ -29,17 +33,17 @@ NPFLAG="${MPIRUN_NPFLAG:--np}"
 # PCsparse_pdfeast_scsrgv_lowest needs well over 10 minutes on 2 ranks.
 RUN_TIMEOUT="${RUN_TIMEOUT:-300}"
 
-LIB="$ROOT/4.0/lib/$ARCH/libpfeast.a"
+LIB="$BASE/lib/$ARCH/libpfeast.a"
 SPIKE_LIB=""
-[ -f "$ROOT/4.0/lib/$ARCH/libspike.a" ] && SPIKE_LIB="$ROOT/4.0/lib/$ARCH/libspike.a"
+[ -f "$BASE/lib/$ARCH/libspike.a" ] && SPIKE_LIB="$BASE/lib/$ARCH/libspike.a"
 # Several examples in the PFEAST directories call the SERIAL interfaces from
 # inside an MPI program -- PF90banded_dfeast_sbgv, for instance, references
 # dfeast_sbgv_, not a p-prefixed routine. Those need libfeast alongside
 # libpfeast, and without it they fail to link with an undefined symbol that
 # looks like a PFEAST problem and is not one.
 FEAST_LIB=""
-[ -f "$ROOT/4.0/lib/$ARCH/libfeast.a" ] && FEAST_LIB="$ROOT/4.0/lib/$ARCH/libfeast.a"
-INC="$ROOT/4.0/include"
+[ -f "$BASE/lib/$ARCH/libfeast.a" ] && FEAST_LIB="$BASE/lib/$ARCH/libfeast.a"
+INC="$BASE/include"
 BLAS="${BLAS_LIBS:--lopenblas}"
 
 [ -f "$LIB" ] || { echo "no $LIB -- run build/build-pfeast.sh first" >&2; exit 1; }
@@ -69,7 +73,7 @@ declare -a FAILED=()
 echo "Running PFEAST examples against $LIB with $NP processes"
 echo
 
-for dir in "$ROOT"/4.0/example/PFEAST-*; do
+for dir in "$BASE"/example/PFEAST-*; do
   [ -d "$dir" ] || continue
   echo "--- $(basename "$dir") ---"
   cp "$dir"/*.mtx "$WORK"/ 2>/dev/null || true

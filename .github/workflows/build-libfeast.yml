@@ -407,6 +407,65 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  # Windows full-feature. The historical belief was that MKL on Windows needs
+  # Intel Fortran; it does not. mkl_rt.1.dll exports the gfortran-convention
+  # trailing-underscore names -- dgemm_, pardiso_, mkl_dcsrmm_ -- and binutils
+  # links directly against a DLL, no import library required. Verified on real
+  # hardware before this job existed: 36/36 with SPIKE, both polynomial
+  # examples included.
+  windows-x64-mkl:
+    name: windows-x64 + MKL (full-feature)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    continue-on-error: true
+    defaults: { run: { shell: msys2 {0} } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc-fortran
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-python-pip
+            make
+      - name: Fetch MKL 2021.4 (the pip wheel carries the DLLs)
+        run: |
+          python -m pip download "mkl==2021.4.0" --no-deps -d mklwheel
+          cd mklwheel && python - <<'PY'
+          import zipfile, glob
+          z = zipfile.ZipFile(glob.glob("*.whl")[0])
+          for n in z.namelist():
+              if "/bin/" in n and n.endswith(".dll"):
+                  z.extract(n, ".")
+          PY
+          ls mklwheel/mkl-2021.4.0.data/data/Library/bin | head -3
+      - name: Build (SPIKE + FEAST against mkl_rt)
+        run: |
+          MKLBIN="$PWD/mklwheel/mkl-2021.4.0.data/data/Library/bin"
+          gcc -O2 -c build/mkl_gfortran_abi_compat.c -o mkl_abi.o
+          export BLAS_LIBS="$PWD/mkl_abi.o $MKLBIN/mkl_rt.1.dll"
+          echo "BLAS_LIBS=$BLAS_LIBS" >> "$GITHUB_ENV"
+          echo "MKLBIN=$MKLBIN" >> "$GITHUB_ENV"
+          echo "MKL_THREADING_LAYER=SEQUENTIAL" >> "$GITHUB_ENV"
+          bash build/build-spike.sh --arch windows-x64-mkl
+          bash build/build-feast.sh --arch windows-x64-mkl --mkl --spike
+          PATH="$MKLBIN:$PATH" bash build/run-test.sh windows-x64-mkl
+      - name: All 36 examples must pass with the direct solver
+        run: |
+          PATH="$MKLBIN:$PATH" bash tools/run_examples.sh windows-x64-mkl | tee examples.log || true
+          grep -q "passed 36, failed 0" examples.log             || { echo "expected 36/36 with MKL"; exit 1; }
+      - name: Developer Kit (full-feature, MKL bundled)
+        shell: bash
+        run: MKL_LIB_DIR="$PWD/mklwheel/mkl-2021.4.0.data/data/Library/bin" bash packaging/build-devkit.sh windows-x64-mkl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FEAST-devkit-windows-x64-mkl
+          path: FEAST-devkit-windows-x64-mkl.zip
+          if-no-files-found: error
+          compression-level: 0
+
   universal:
     name: macos-universal
     needs: build
