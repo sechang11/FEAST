@@ -61,6 +61,23 @@ jobs:
           # OpenBLAS, not Accelerate: Accelerate's LAPACK makes FEAST's
           # non-Hermitian routines return info=-3. See build/build-feast.sh.
           brew install gcc openblas
+          # ...but not Homebrew's OpenBLAS for the numerics. Its arm64 bottle
+          # is threaded with pthreads, and against FEAST -- which is compiled
+          # -fopenmp, and whose banded path runs through the heavily
+          # OpenMP-parallel SPIKE -- 8 of the 10 banded examples return info=-3
+          # or info=2. The conda-forge build (openmp_ variant) passes all ten
+          # on the same hardware, so use that for linking. Homebrew is still
+          # installed above for gfortran.
+          case "$(uname -m)" in
+            arm64) MAMBA_SUBDIR=osx-arm64 ;;
+            *)     MAMBA_SUBDIR=osx-64 ;;
+          esac
+          curl -Ls "micro.mamba.pm/api/micromamba/$MAMBA_SUBDIR/latest"             | tar -xvj bin/micromamba
+          ./bin/micromamba create -y -p "$PWD/blasenv" -c conda-forge openblas
+          echo "FEAST_BLAS_PREFIX=$PWD/blasenv" >> $GITHUB_ENV
+          echo "BLAS_LIBS=-L$PWD/blasenv/lib -lopenblas" >> $GITHUB_ENV
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$PWD/blasenv/lib" >> $GITHUB_ENV
+          ls "$PWD/blasenv/lib/" | grep -i openblas | head -3
           # Homebrew ships versioned binaries (gfortran-14) and no plain
           # `gfortran`; both scripts honour $FC.
           FC_BIN="$(ls "$(brew --prefix)"/bin/gfortran-* | sort -V | tail -1)"
