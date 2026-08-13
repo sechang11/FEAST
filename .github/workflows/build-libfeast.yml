@@ -48,7 +48,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gfortran libopenblas-dev
+          sudo apt-get install -y gfortran libopenblas-dev libopenmpi-dev openmpi-bin
           # Qt needs these even with the offscreen platform plugin.
           sudo apt-get install -y \
             libegl1 libglib2.0-0 libdbus-1-3 libxkbcommon-x11-0 \
@@ -60,7 +60,7 @@ jobs:
         run: |
           # OpenBLAS, not Accelerate: Accelerate's LAPACK makes FEAST's
           # non-Hermitian routines return info=-3. See build/build-feast.sh.
-          brew install gcc openblas
+          brew install gcc openblas open-mpi
           # ...but not Homebrew's OpenBLAS for the numerics. Its arm64 bottle
           # is threaded with pthreads, and against FEAST -- which is compiled
           # -fopenmp, and whose banded path runs through the heavily
@@ -95,6 +95,7 @@ jobs:
             mingw-w64-x86_64-gcc-fortran
             mingw-w64-x86_64-openblas
             mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-msmpi
             make
 
       # SPIKE unlocks the 20 banded routines. It is fetched from
@@ -146,6 +147,45 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: bash tools/run_examples.sh ${{ matrix.arch }} || true
+
+      # PFEAST: the same solver with -DMPI plus the distributed interfaces.
+      # Built on every platform. The example run is informational rather than
+      # gating: the runners have 2-4 cores and the L1L2L3 examples want 8
+      # oversubscribed ranks, so timeouts there are a property of the runner,
+      # not the library. The authoritative numbers are the measured runs in
+      # COMPATIBILITY.md (40/44 on Windows and Apple Silicon, nothing skipped).
+      - name: Build PFEAST (Unix)
+        if: runner.os != 'Windows'
+        run: bash build/build-pfeast.sh --arch ${{ matrix.arch }}
+
+      - name: Build PFEAST (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          bash build/build-pfeast.sh --arch ${{ matrix.arch }}             --mpifc gfortran --mpi-inc /mingw64/include
+
+      - name: Run PFEAST examples (Unix)
+        if: runner.os != 'Windows'
+        continue-on-error: true
+        run: RUN_TIMEOUT=420 bash tools/run_pfeast_examples.sh ${{ matrix.arch }} 2 || true
+
+      # The Developer Kit: libfeast+libspike+libpfeast, headers, all 80
+      # upstream examples, runners and build scripts with the shims. Built
+      # here because this is the machine where the file permissions are real.
+      # On Windows this runs in git-bash, not msys2, so powershell is on PATH
+      # for the zip step.
+      - name: Build the Developer Kit
+        shell: bash
+        run: bash packaging/build-devkit.sh ${{ matrix.arch }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FEAST-devkit-${{ matrix.arch }}
+          path: |
+            FEAST-devkit-${{ matrix.arch }}.tar.gz
+            FEAST-devkit-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          compression-level: 0
 
       # ---------------------------------------------------------------- python
       - uses: actions/setup-python@v5
