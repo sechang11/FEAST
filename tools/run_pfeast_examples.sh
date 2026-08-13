@@ -28,11 +28,29 @@ NPFLAG="${MPIRUN_NPFLAG:--np}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-300}"
 
 LIB="$ROOT/4.0/lib/$ARCH/libpfeast.a"
+SPIKE_LIB=""
+[ -f "$ROOT/4.0/lib/$ARCH/libspike.a" ] && SPIKE_LIB="$ROOT/4.0/lib/$ARCH/libspike.a"
 INC="$ROOT/4.0/include"
 BLAS="${BLAS_LIBS:--lopenblas}"
 
 [ -f "$LIB" ] || { echo "no $LIB -- run build/build-pfeast.sh first" >&2; exit 1; }
 command -v "$MPIRUN" >/dev/null || { echo "no $MPIRUN on PATH" >&2; exit 1; }
+
+# `timeout` is GNU coreutils and absent on macOS, where every example then
+# "fails" with exit 127 having actually built and run fine. Same fix as
+# tools/run_examples.sh: prefer timeout, then gtimeout, then a shell watchdog.
+if command -v timeout >/dev/null 2>&1;    then RUN_LIMITED() { timeout "$@"; }
+elif command -v gtimeout >/dev/null 2>&1; then RUN_LIMITED() { gtimeout "$@"; }
+else
+  RUN_LIMITED() {
+    local secs="$1"; shift
+    "$@" & local pid=$!
+    ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) & local watchdog=$!
+    wait "$pid"; local rc=$?
+    kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+    return $rc
+  }
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -49,17 +67,24 @@ for dir in "$ROOT"/4.0/example/PFEAST-*; do
   for src in "$dir"/*.c "$dir"/*.f90; do
     [ -e "$src" ] || continue
     name="$(basename "$src")"; base="${name%.*}"
+    # Banded needs SPIKE. Attempt it when a libspike.a sits beside libpfeast,
+    # rather than skipping unconditionally -- SPIKE builds on every platform
+    # now, and an unconditional skip hid 8 examples that do in fact run.
     case "$base" in
-      *banded*) echo "  SKIP  $name  (needs SPIKE)"; skip=$((skip+1)); continue ;;
+      *banded*)
+        if [ -z "${SPIKE_LIB:-}" ]; then
+          echo "  SKIP  $name  (needs SPIKE)"; skip=$((skip+1)); continue
+        fi ;;
     esac
 
     bin="$WORK/$base"
     if [[ "$name" == *.c ]]; then
       "$MPICC" -O2 -c "$src" -o "$bin.o" -I"$INC" ${MPI_INC:+-I$MPI_INC} 2>"$WORK/$base.build" \
-        && "$MPIFC" -o "$bin" "$bin.o" "$LIB" $BLAS -fopenmp -lm 2>>"$WORK/$base.build"
+        && "$MPIFC" -o "$bin" "$bin.o" "$LIB" ${SPIKE_LIB} $BLAS -fopenmp -lm \
+             2>>"$WORK/$base.build"
     else
       "$MPIFC" -O2 -ffree-line-length-none ${MPI_INC:+-I$MPI_INC} \
-        -o "$bin" "$src" "$LIB" $BLAS -fopenmp \
+        -o "$bin" "$src" "$LIB" ${SPIKE_LIB} $BLAS -fopenmp \
         2>"$WORK/$base.build"
     fi
     if [ ! -x "$bin" ]; then
@@ -79,7 +104,7 @@ for dir in "$ROOT"/4.0/example/PFEAST-*; do
     esac
 
     out="$WORK/$base.out"
-    if (cd "$WORK" && timeout "$RUN_TIMEOUT" "$MPIRUN" $NPFLAG "$np" $MPIRUN_ARGS "./$base" $arg \
+    if (cd "$WORK" && RUN_LIMITED "$RUN_TIMEOUT" "$MPIRUN" $NPFLAG "$np" $MPIRUN_ARGS "./$base" $arg \
           >"$out" 2>&1); then
       if grep -qiE "info *[:=] *[^0 ]|FEAST OUTPUT INFO +[^0 ]" "$out"; then
         echo "  RAN-BAD-INFO  $name"; grep -iE "info" "$out" | head -2 | sed 's/^/        /'
