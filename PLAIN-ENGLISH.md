@@ -120,7 +120,7 @@ All three are self-contained: unzip and run. No Python, no compilers, nothing.
 | Sparse polynomial | ✅ | ✅ | ✅ | ❌ | In the app: `system5`, a quadratic problem solved directly rather than linearised. Marginal without MKL — it finds all 20 eigenvalues but how far the residual falls depends on the machine. |
 | Banded | ✅ | ✅ | ✅ | ❌ | Needs SPIKE. Now built and tested on **all four** CI platforms including Apple Silicon. |
 | Non-Hermitian (complex discs) | ✅ | ✅ | ✅ | ❌ | In the app: pick a non-Hermitian problem and the Spectrum tab becomes a complex plane with the search disc. The calculator is still interval-only. |
-| PFEAST (clusters) | builds, crashes | ✅ | untested | ❌ | For clusters. Meaningless in a browser. |
+| PFEAST (clusters) | ✅ **40/44** | ✅ | ✅ **40/44** | ❌ | For clusters. Fixed on Windows by our MPI shim; meaningless in a browser. |
 
 ### The app's views, by platform
 

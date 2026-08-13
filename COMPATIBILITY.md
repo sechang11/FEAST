@@ -153,16 +153,24 @@ the numerics and broke the bundle, which shipped a `libfeast` referencing an
 `@rpath/libopenblas.0.dylib` that was not there. The self-test in a clean
 environment caught that before it reached anyone.
 
-### Windows cannot run PFEAST
+### Windows PFEAST -- fixed
 
-Not a build problem -- it builds. `MPI_ALLREDUCE(MPI_IN_PLACE, ...)`, which
-PFEAST uses at 215 call sites, is broken in the combination of mingw gfortran
-and MS-MPI: a five-line test program with no FEAST involved returns zeros
-instead of the reduction. MS-MPI's C header defines the sentinel as the address
-`(void*)-1`; the MSYS2 Fortran binding declares it as an INTEGER in a COMMON
-block, the MPICH convention, and MS-MPI does not recognise it. The routes to a
-fix are Intel Fortran (the officially supported pairing), Intel MPI, or
-patching FEAST to avoid `MPI_IN_PLACE` -- 215 sites in someone else's library.
+This section previously recorded that PFEAST could not run on Windows:
+`MPI_ALLREDUCE(MPI_IN_PLACE, ...)`, which PFEAST calls at 222 sites, silently
+corrupts data under mingw gfortran + MS-MPI. The mechanism: MS-MPI recognises
+the Fortran sentinel by the address of a COMMON variable its `mpif.h` marks
+`!DEC$ ATTRIBUTES DLLIMPORT` -- a directive only Intel Fortran honours, so
+gfortran programs pass an address the runtime has never seen and it reduces
+garbage.
+
+**Fixed** by a 20-line interception shim (`build/msmpi_inplace_compat.c`),
+compiled into `libpfeast.a` on Windows, which swaps the program-local sentinel
+for the C `MPI_IN_PLACE`. Measured on real hardware with MS-MPI:
+
+    passed 40, failed 4, skipped 0
+
+-- identical to Apple Silicon, banded included. The four failures are the
+polynomial pair that needs MKL on every platform.
 
 ## Routine coverage, by platform
 

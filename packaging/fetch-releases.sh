@@ -100,6 +100,33 @@ zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$zip" "$dest" || got=0
   echo "     $(du -sh "$dest" | cut -f1)"
 done
 
+# The Developer Kits: one archive per platform, plus the MKL full-feature
+# variant when that job went green. Small (the app bundles dwarf them), so
+# fetch unconditionally and skip what a run does not have.
+for arch in windows-x64 linux-x64 macos-arm64 macos-x64 macos-x64-mkl; do
+  for ext in tar.gz zip; do
+    name="FEAST-devkit-$arch"
+    if [ "$HAVE_GH" -eq 1 ]; then
+      gh run download "$RUN" --repo "$REPO" --name "$name" --dir "$OUT" 2>/dev/null || true
+    else
+      aid="$(api "https://api.github.com/repos/$REPO/actions/runs/$RUN/artifacts?per_page=100"              | python -c "
+import json,sys
+want='$name'
+print(next((str(a['id']) for a in json.load(sys.stdin)['artifacts']
+            if a['name']==want), ''))")"
+      if [ -n "$aid" ]; then
+        zipf="$OUT/.$name.zip"
+        api -o "$zipf" "https://api.github.com/repos/$REPO/actions/artifacts/$aid/zip"           && python -c "
+import zipfile,sys
+zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$zipf" "$OUT" || true
+        rm -f "$zipf"
+      fi
+    fi
+    break
+  done
+done
+ls "$OUT"/FEAST-devkit-* 2>/dev/null | sed "s/^/  devkit: /" || true
+
 echo
 echo "release tree:"
 for d in "$OUT"/*/; do

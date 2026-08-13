@@ -229,3 +229,31 @@ ratio flattens it, that the rotation turns it — because a wrong argument order
 still *runs*, and only the numbers catch it.
 
 Happy to send a patch against `feast_tools.h` if that is useful.
+
+---
+
+## 9. A second finding: PFEAST on Windows, diagnosed and fixed
+
+While porting PFEAST we found that `MPI_ALLREDUCE(MPI_IN_PLACE, …)` — which
+PFEAST calls at 222 sites — silently corrupts data when the caller is compiled
+with mingw gfortran against Microsoft MPI, then crashes at a later collective.
+A five-line reproducer with no FEAST code returns zeros instead of the
+reduction.
+
+The mechanism is a compiler-directive gap, not a FEAST bug: MS-MPI recognises
+the Fortran `MPI_IN_PLACE` by the *address* of a variable in
+`COMMON /MPIPRIV1/`, which its `mpif.h` marks
+
+    !DEC$ ATTRIBUTES DLLIMPORT :: /MPIPRIV1/
+
+Only Intel Fortran honours `!DEC$`; gfortran allocates its own private copy of
+the COMMON block, so the runtime never sees the sentinel address it expects and
+treats it as a real buffer.
+
+The fix is a 20-line interception shim, included in our distribution as
+`build/msmpi_inplace_compat.c`: it defines `mpi_allreduce_`, compares the send
+buffer against the program's own sentinel, and forwards to the C API with the
+C `MPI_IN_PLACE`. With it, PFEAST runs 40 of its 44 examples on Windows —
+identical to Apple Silicon. Anyone building PFEAST on Windows with the free
+toolchain needs this; it may be worth a note in the guide, since nothing about
+the failure points at the actual cause.
