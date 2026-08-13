@@ -455,6 +455,11 @@ jobs:
           echo "BLAS_LIBS=$BLAS_LIBS" >> "$GITHUB_ENV"
           echo "MKLBIN=$MKLBIN" >> "$GITHUB_ENV"
           echo "MKL_THREADING_LAYER=SEQUENTIAL" >> "$GITHUB_ENV"
+          # ...and in THIS step too: GITHUB_ENV only reaches later steps, and
+          # without it mkl_rt picks the Intel threading layer and dies looking
+          # for libiomp5md.dll, which the wheel does not carry. msys reports
+          # the missing-DLL status as a bare exit 127.
+          export MKL_THREADING_LAYER=SEQUENTIAL
           bash build/build-spike.sh --arch windows-x64-mkl
           bash build/build-feast.sh --arch windows-x64-mkl --mkl --spike
           PATH="$MKLBIN:$PATH" bash build/run-test.sh windows-x64-mkl
