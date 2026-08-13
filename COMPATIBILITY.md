@@ -11,11 +11,11 @@ Source: CI, one run, all four platforms. The macOS ARM column is discussed below
 
 | example | family | Windows | Linux | macOS Intel | macOS ARM |
 |---|---|---|---|---|---|
-| `Cbanded_dfeast_gbgv.c` | banded | pass | pass | - | info |
-| `Cbanded_dfeast_sbgv.c` | banded | pass | pass | - | info |
+| `Cbanded_dfeast_gbgv.c` | banded | pass | pass | - | pass |
+| `Cbanded_dfeast_sbgv.c` | banded | pass | pass | - | pass |
 | `Cbanded_zfeast_hbev.c` | banded | pass | pass | - | pass |
-| `Cbanded_zfeast_sbev.c` | banded | pass | pass | - | info |
-| `Cbanded_zfeast_sbevx.c` | banded | pass | pass | - | info |
+| `Cbanded_zfeast_sbev.c` | banded | pass | pass | - | pass |
+| `Cbanded_zfeast_sbevx.c` | banded | pass | pass | - | pass |
 | `Cdense_dfeast_gegv.c` | dense | pass | pass | - | pass |
 | `Cdense_dfeast_sygv.c` | dense | pass | pass | - | pass |
 | `Cdense_dfeast_sypev.c` | dense | pass | pass | - | pass |
@@ -29,11 +29,11 @@ Source: CI, one run, all four platforms. The macOS ARM column is discussed below
 | `Csparse_zfeast_hcsrev.c` | sparse | pass | pass | - | pass |
 | `Csparse_zfeast_scsrev.c` | sparse | pass | pass | - | pass |
 | `Csparse_zfeast_scsrevx.c` | sparse | pass | pass | - | pass |
-| `F90banded_dfeast_gbgv.f90` | banded | pass | pass | - | info |
-| `F90banded_dfeast_sbgv.f90` | banded | pass | pass | - | info |
+| `F90banded_dfeast_gbgv.f90` | banded | pass | pass | - | pass |
+| `F90banded_dfeast_sbgv.f90` | banded | pass | pass | - | pass |
 | `F90banded_zfeast_hbev.f90` | banded | pass | pass | - | pass |
-| `F90banded_zfeast_sbev.f90` | banded | pass | pass | - | info |
-| `F90banded_zfeast_sbevx.f90` | banded | pass | pass | - | info |
+| `F90banded_zfeast_sbev.f90` | banded | pass | pass | - | pass |
+| `F90banded_zfeast_sbevx.f90` | banded | pass | pass | - | pass |
 | `F90dense_dfeast_gegv.f90` | dense | pass | pass | - | pass |
 | `F90dense_dfeast_sygv.f90` | dense | pass | pass | - | pass |
 | `F90dense_dfeast_sypev.f90` | dense | pass | pass | - | pass |
@@ -121,14 +121,16 @@ systems are solved iteratively, and this problem does not reach the default
 desktop app, which sizes the subspace at M0=100 and asks for 1e-6 instead of
 inheriting the example's settings.
 
-### Banded fails on macOS ARM *in CI only*
+### Banded on macOS ARM -- fixed
 
-CI reports 8 of the 10 banded examples failing on Apple Silicon, with `info=-3`
-and `info=2`. On a real M1 the same 10 examples **all pass**, at both 1 and 4
-OpenMP threads.
+This section previously recorded 8 of the 10 banded examples failing on Apple
+Silicon with `info=-3` and `info=2`, while passing on a real M1. **Fixed**: all
+ten now pass on every platform, and no example differs between platforms at all.
 
-The difference is the BLAS. CI installs OpenBLAS through Homebrew; the M1 test
-used the conda-forge build:
+The cause was the BLAS, and not its version.
+
+CI installed OpenBLAS through Homebrew; the M1 test used the conda-forge
+build:
 
     CI (fails)   -L/opt/homebrew/opt/openblas/lib -lopenblas
     M1 (passes)  -L$HOME/feastenv/lib -lopenblas        (conda-forge)
@@ -138,14 +140,18 @@ Apple's Accelerate produces against FEAST's non-Hermitian path, which suggests
 Homebrew's arm64 OpenBLAS has a LAPACK problem in the same area rather than a
 threading one -- thread count made no difference.
 
-**This matters beyond CI.** The macOS ARM library we ship is built by CI, so
-the banded routines in that build are affected. The desktop app does not call
-them (it uses the sparse and dense paths), so the shipped application is
-unaffected -- but anyone reaching the banded routines through `feastpy.raw` on
-an Apple Silicon build would hit it.
+Homebrew's arm64 bottle is threaded with pthreads; the conda-forge build is the
+`openmp_` variant. FEAST is compiled `-fopenmp` and the banded path runs through
+SPIKE, which is heavily OpenMP-parallel, so a pthread-threaded BLAS underneath
+it is a known source of exactly this failure. Thread count made no difference on
+the hardware, which ruled out simple oversubscription.
 
-Not yet fixed. The candidate fix is to install OpenBLAS from conda-forge in CI
-rather than Homebrew, which is the combination already proven on the hardware.
+This mattered beyond CI, because CI builds the library we ship: the banded
+routines in the Apple Silicon build carried the same defect. macOS now links
+conda-forge OpenBLAS, and the packaging bundles it -- the first attempt fixed
+the numerics and broke the bundle, which shipped a `libfeast` referencing an
+`@rpath/libopenblas.0.dylib` that was not there. The self-test in a clean
+environment caught that before it reached anyone.
 
 ### Windows cannot run PFEAST
 
