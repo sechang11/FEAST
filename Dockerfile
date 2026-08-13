@@ -43,14 +43,20 @@ RUN bash build/build-feast.sh --arch linux-x64 \
 # the container's first request fast.
 RUN python web/build_site.py
 
-ENV PYTHONPATH=/app/python \
-    PYTHONUNBUFFERED=1 \
-    # FEAST is OpenMP-parallel and will otherwise claim every core it can see,
-    # which on a shared host means one visitor starves the rest. server.py
-    # divides this further across concurrent solves.
-    OMP_NUM_THREADS=2
+# No PYTHONPATH: server.py puts feastpy on the path itself, and a start command
+# that depends on an environment prefix breaks on any platform that execs it
+# without a shell -- which is exactly how the first deploy of this failed.
+#
+# OMP_NUM_THREADS: FEAST is OpenMP-parallel and will otherwise claim every core
+# it can see, so on a shared host one visitor starves the rest. server.py
+# divides this further across concurrent solves.
+#
+# Comments go above the instruction, not inside a line continuation, where
+# their handling differs between builders.
+ENV PYTHONUNBUFFERED=1
+ENV OMP_NUM_THREADS=2
 
-# $PORT is assigned by the platform at runtime, so the shell form is required
-# to expand it; 8000 is the fallback for a plain `docker run`.
+# Exec form, no shell: serve.py reads $PORT from the environment itself, so
+# nothing here depends on variable expansion.
 EXPOSE 8000
-CMD python -m uvicorn server:app --app-dir web --host 0.0.0.0 --port ${PORT:-8000}
+CMD ["python", "web/serve.py"]

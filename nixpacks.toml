@@ -25,7 +25,7 @@ cmds = [
 [start]
 # $PORT is assigned by the platform at runtime and is not knowable earlier.
 # PYTHONPATH puts feastpy on the path without an install step.
-cmd = "PYTHONPATH=python python -m uvicorn server:app --app-dir web --host 0.0.0.0 --port $PORT"
+cmd = "python web/serve.py"
 
 [variables]
 # FEAST is OpenMP-parallel and will otherwise grab every core it can see, which
