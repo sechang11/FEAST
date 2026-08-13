@@ -345,9 +345,13 @@ jobs:
           # hidden pointer. See build/mkl_gfortran_abi_compat.c.
           cc -O2 -c build/mkl_gfortran_abi_compat.c -o mkl_abi.o
           MKL="$PWD/mklenv/lib"
-          export BLAS_LIBS="$PWD/mkl_abi.o -L$MKL -lmkl_intel_lp64 -lmkl_sequential -lmkl_core -lpthread -lm -ldl"
+          # -rpath baked into every binary, NOT DYLD_LIBRARY_PATH: macOS SIP
+          # strips DYLD_* across protected binaries (including /bin/bash), so
+          # the variable never reliably reaches a test process -- and exported
+          # through GITHUB_ENV it shadows the system libiconv for every later
+          # step, which breaks git itself in job cleanup. Measured both.
+          export BLAS_LIBS="$PWD/mkl_abi.o -L$MKL -Wl,-rpath,$MKL -lmkl_intel_lp64 -lmkl_sequential -lmkl_core -lpthread -lm -ldl"
           echo "BLAS_LIBS=$BLAS_LIBS" >> $GITHUB_ENV
-          echo "DYLD_LIBRARY_PATH=$MKL" >> $GITHUB_ENV
           bash build/build-spike.sh --arch macos-x64-mkl
           bash build/build-feast.sh --arch macos-x64-mkl --mkl --spike
           bash build/run-test.sh macos-x64-mkl
