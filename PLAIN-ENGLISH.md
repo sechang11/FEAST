@@ -151,8 +151,9 @@ cannot do here. The differences are:
 - **MKL is optional, not required.** It is a speed-up and it lets FEAST's own
   examples run unmodified. Every capability it unlocks is also reachable
   without it, through FEAST's iterative routines. Tested.
-- **MKL on Windows** works, but with Intel's compiler rather than the free one
-  we use. That is a toolchain choice, not a Windows limit.
+- **MKL on Windows now works with the free compiler.** The old belief that it
+  needed Intel's was wrong: `mkl_rt.dll` exports the names gfortran uses, and
+  the full build passes all 36 examples on Windows.
 - **MKL on Apple Silicon** genuinely does not exist — Intel only ships it for
   Intel chips. It does not matter, because the iterative routines cover the
   same ground.
@@ -259,9 +260,11 @@ there's one implementation to keep correct, not three.
    Venmo.
 5. **Is v4.0 still current?** It's from February 2020 — six years old. Is a v5.0
    coming? That changes what "includes updates" should mean.
-6. **Ship MKL, or not?** It makes some things faster and unlocks sparse
-   polynomial, but Intel's redistribution terms are stricter than FEAST's BSD,
-   and it doesn't work on Apple Silicon.
+6. **Ship MKL, or not?** We now build it into the optional "full-feature"
+   Developer Kits on all three Intel-capable platforms (redistribution is
+   permitted by Intel's Simplified Software License), and Apple Silicon runs
+   the Intel kit under Rosetta. The question is whether the *app* should also
+   have an MKL edition.
 7. **Does anyone actually want this?** He knows the user community. Five minutes
    of his opinion is worth more than months of guessing.
 

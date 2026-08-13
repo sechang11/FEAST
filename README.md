@@ -123,16 +123,28 @@ environment.
 
 ---
 
+## The two packages
+
+- **The application** (`FEAST-<os>.zip/.tar.gz`) — for people who want answers.
+  Unzip and run; no MKL inside, every solve is iterative.
+- **The Developer Kit** (`FEAST-devkit-<os>`) — for people who link FEAST into
+  their own code: all three libraries, headers, upstream's 80 examples, the
+  runners and build scripts. The `-mkl` variants additionally bundle the MKL
+  2021.4 runtime and are the **full-feature** builds: upstream's examples go
+  **36/36** on Windows, Linux and macOS Intel, direct PARDISO solver included.
+  On Apple Silicon the Intel MKL kit runs under Rosetta 2 — measured on an M1,
+  its bundled test binary passes at 5.2e-16.
+
 ## Known limitations
 
 - **macOS and Windows builds are unsigned.** Signing and notarization need
   certificates that have not been bought.
-- **No MKL in the shipped libraries**, so every inner solve is iterative. Three
-  built-in problems are affected and each says so on its own entry: `grcar`
-  does not converge at all, `c6h6` finds nothing at its shipped settings, and
-  `co` stops short. A direct solver would settle all three.
-- **PFEAST builds on Windows but every binary crashes.** Undiagnosed. It is for
-  clusters, which is not where this application runs.
+- **The shipped application has no MKL**, so its inner solves are iterative.
+  Three built-in problems say so on their own entries (`grcar`, `c6h6`, `co`);
+  the full-feature Developer Kits are where the direct solver lives.
+- **There is no native MKL for Apple Silicon** — Intel ships none for ARM.
+  Native ARM covers 34/36 of upstream's examples; the remaining two (direct
+  polynomial) run through the Intel kit under Rosetta.
 - **The web calculator is interval-only** and capped at 30 seconds. That is a
   page nobody has built, not a limit of the backend.
 - **Licensing is switched off.** The application runs unrestricted until a
