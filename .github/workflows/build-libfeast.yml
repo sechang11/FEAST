@@ -214,6 +214,50 @@ jobs:
           path: dist/FEAST-${{ matrix.arch }}/
           if-no-files-found: warn
 
+      # A single archive per platform, ready to hand to a user -- built HERE,
+      # on the machine that produced the binaries, because that is the only
+      # place the file permissions are real. A GitHub artifact is itself a zip
+      # and does not carry the executable bit, so an archive repacked from a
+      # downloaded artifact ships a launcher nobody can run: on Linux and macOS
+      # the user gets "Permission denied" from a build that is otherwise fine.
+      #
+      # tar.gz on Unix (keeps the executable bit and any symlinks inside a
+      # .app), zip on Windows (which has no executable bit to lose).
+      - name: Build the distributable archive (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd dist
+          if [ -d FEAST.app ]; then
+            tar czf "../FEAST-${{ matrix.arch }}.tar.gz" FEAST.app
+          else
+            tar czf "../FEAST-${{ matrix.arch }}.tar.gz" "FEAST-${{ matrix.arch }}"
+          fi
+          cd ..
+          ls -lh "FEAST-${{ matrix.arch }}.tar.gz"
+          # Assert the launcher is executable inside the archive; a silent
+          # regression here is only discovered by the person who downloads it.
+          tar tzvf "FEAST-${{ matrix.arch }}.tar.gz"             | grep -E '(MacOS/FEAST|/FEAST)$' | head -3
+          tar tzvf "FEAST-${{ matrix.arch }}.tar.gz"             | grep -E '(MacOS/FEAST|/FEAST)$' | grep -q '^-rwx'             || { echo "launcher is not executable in the archive"; exit 1; }
+
+      - name: Build the distributable archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/FEAST-${{ matrix.arch }}/*" `
+                           -DestinationPath "FEAST-${{ matrix.arch }}.zip" `
+                           -CompressionLevel Optimal
+          Get-Item "FEAST-${{ matrix.arch }}.zip" |
+            Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FEAST-dist-${{ matrix.arch }}
+          path: |
+            FEAST-${{ matrix.arch }}.tar.gz
+            FEAST-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          compression-level: 0        # already compressed
+
   universal:
     name: macos-universal
     needs: build
