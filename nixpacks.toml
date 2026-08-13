@@ -1,0 +1,30 @@
+# Railway / Nixpacks deployment for the web calculator.
+#
+# The catch: the calculator runs the REAL FEAST library, so the host needs
+# libfeast.so. No binary is committed to this repo -- a Fortran library built
+# on one machine is not portable to another -- so it is compiled during the
+# build phase. That needs gfortran and a BLAS, hence the setup packages.
+#
+# Build takes a couple of minutes. It is a one-off per deploy, not per request.
+
+[phases.setup]
+nixPkgs = ["python312", "gfortran", "openblas", "bash", "gnumake", "gnused"]
+
+[phases.build]
+cmds = [
+  "bash build/build-feast.sh --arch linux-x64",
+  "bash build/run-test.sh linux-x64",
+  "python -m pip install --upgrade pip",
+  "python -m pip install -r requirements.txt",
+]
+
+[start]
+# $PORT is assigned by the platform at runtime and is not knowable earlier.
+# PYTHONPATH puts feastpy on the path without an install step.
+cmd = "PYTHONPATH=python python -m uvicorn server:app --app-dir web --host 0.0.0.0 --port $PORT"
+
+[variables]
+# FEAST is OpenMP-parallel and will otherwise grab every core it can see, which
+# on a shared host means one visitor starves the rest. server.py divides this
+# further per concurrent solve.
+OMP_NUM_THREADS = "2"

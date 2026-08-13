@@ -1,0 +1,7 @@
+# Web calculator + API. The desktop app needs PySide6 and pyqtgraph on top of
+# these; a server does not, and installing Qt on a headless host is 100 MB of
+# nothing.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+numpy>=1.26
+scipy>=1.11

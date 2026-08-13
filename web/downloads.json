@@ -1,0 +1,44 @@
+{
+  "_comment": [
+    "Download links for the site's Download page, kept as data so publishing a",
+    "new build is editing this file rather than editing a page template.",
+    "",
+    "'base' is prepended to any 'file' that is not already a full URL. Point it",
+    "at a GitHub release (recommended: direct links, no interstitial, versioned,",
+    "2 GB per file) or at any other host.",
+    "",
+    "Set 'file' to null for a platform that has not been published yet; the page",
+    "then shows it as built-and-tested but not yet downloadable, rather than",
+    "offering a link that 404s."
+  ],
+  "version": "0.1.0",
+  "released": "",
+  "base": "https://github.com/sechang11/FEAST/releases/download/v0.1.0/",
+  "releases_page": "https://github.com/sechang11/FEAST/releases",
+  "platforms": [
+    {
+      "name": "Windows x64",
+      "note": "Windows 10 or later. Unzip and run FEAST.exe.",
+      "file": null,
+      "size": "138 MB"
+    },
+    {
+      "name": "macOS (Apple Silicon)",
+      "note": "M1 and later. Unzip and open FEAST.app.",
+      "file": null,
+      "size": ""
+    },
+    {
+      "name": "macOS (Intel)",
+      "note": "Unzip and open FEAST.app.",
+      "file": null,
+      "size": ""
+    },
+    {
+      "name": "Linux x64",
+      "note": "Unpack and run ./FEAST. glibc 2.35 or later.",
+      "file": null,
+      "size": ""
+    }
+  ]
+}

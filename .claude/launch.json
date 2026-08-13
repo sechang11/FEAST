@@ -3,12 +3,10 @@
   "configurations": [
     {
       "name": "feast-web",
-      "runtimeExecutable": "cmd",
-      "runtimeArgs": [
-        "/c",
-        "cd web && ..\\.venv\\Scripts\\python.exe -m uvicorn server:app --port 8000"
-      ],
-      "port": 8000
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "uvicorn", "server:app", "--port", "8010"],
+      "cwd": "web",
+      "port": 8010
     }
   ]
 }

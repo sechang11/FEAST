@@ -13,7 +13,8 @@ from __future__ import annotations
 import html
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parent / "static"
+HERE = Path(__file__).resolve().parent
+OUT = HERE / "static"
 
 NAV = [
     ("index.html", "Home"),
@@ -86,9 +87,10 @@ def render(active: str, title: str, description: str, body: str,
 HOME = """
 <section class="hero">
   <h1>Every eigenvalue in an interval &mdash; not the first <em>k</em></h1>
-  <p class="lead">FEAST solves standard and generalized Hermitian eigenvalue
-     problems by contour integration. You give it a range; it returns everything
-     inside, with residuals.</p>
+  <p class="lead">FEAST solves standard, generalized and polynomial eigenvalue
+     problems by contour integration. You give it a region &mdash; an interval
+     on the real line, or a disc in the complex plane &mdash; and it returns
+     everything inside, with a residual for each.</p>
   <p class="cta">
     <a class="button primary" href="calculator.html">Try the free calculator</a>
     <a class="button" href="download.html">Download the desktop app</a>
@@ -150,8 +152,13 @@ FEATURES = """
     <li>Standard <code>A x = &lambda; x</code> and generalized
         <code>A x = &lambda; B x</code> problems, with <code>B</code> positive
         definite.</li>
-    <li>Real symmetric and complex Hermitian, in double precision.</li>
-    <li>Dense and sparse (CSR) interfaces.</li>
+    <li>Real symmetric, complex Hermitian, complex symmetric and general
+        non-Hermitian, in double precision.</li>
+    <li>Polynomial problems &mdash;
+        <code>(A<sub>0</sub> + &lambda;A<sub>1</sub> + &lambda;&sup2;A<sub>2</sub>)x = 0</code>
+        &mdash; solved directly, without linearising into a problem of twice
+        the size.</li>
+    <li>Dense, sparse (CSR) and banded interfaces.</li>
     <li>IFEAST variants that solve the inner linear systems iteratively, so no
         direct factorisation &mdash; and no MKL PARDISO &mdash; is required.</li>
     <li>All eigenvalues in the interval, with per-eigenpair residuals.</li>
@@ -248,33 +255,86 @@ print(r.n_found, r.eigenvalues, r.residuals)</code></pre>
 </section>
 """
 
+def _download_table() -> str:
+    """Build the platform table from downloads.json.
+
+    Kept as data rather than markup so publishing a build is editing one JSON
+    file. A platform with no file yet is shown as built and tested but not
+    downloadable, which is honest -- better than a link that 404s.
+    """
+    import json
+
+    cfg_path = HERE / "downloads.json"
+    if not cfg_path.is_file():
+        return "<p class=\"note\">No downloads configured yet.</p>"
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    base = cfg.get("base", "")
+
+    rows = []
+    any_link = False
+    for p in cfg.get("platforms", []):
+        f = p.get("file")
+        if f:
+            any_link = True
+            url = f if f.startswith("http") else base + f
+            size = f" <span class=\"muted\">({p['size']})</span>" if p.get("size") else ""
+            cell = f'<a class="button primary" href="{url}">Download</a>{size}'
+        else:
+            cell = '<span class="muted">not published yet</span>'
+        rows.append(f"<tr><td><strong>{p['name']}</strong><br>"
+                    f"<span class=\"muted\">{p.get('note', '')}</span></td>"
+                    f"<td>{cell}</td></tr>")
+
+    head = ""
+    if cfg.get("version"):
+        when = f" &mdash; {cfg['released']}" if cfg.get("released") else ""
+        head = f"<p>Current version <strong>{cfg['version']}</strong>{when}.</p>"
+    tail = ""
+    if not any_link:
+        tail = (f'<p class="note">Builds exist and are tested on every platform '
+                f'above, but none has been published for download yet. They are '
+                f'produced by CI on every change and can be fetched from the '
+                f'<a href="{cfg.get("releases_page", "#")}">releases page</a> '
+                f'once published.</p>')
+    return head + "<table>" + "".join(rows) + "</table>" + tail
+
+
 DOWNLOAD = """
 <h1>Download</h1>
 
 <section class="panel">
   <h2>Desktop application</h2>
-  <p>Builds are produced for Windows (x64), macOS (Intel, Apple Silicon and a
-     universal binary) and Linux (x64). Each one is checked in CI against a
-     matrix whose spectrum is known analytically, and the Python and GUI test
-     suites run on every platform.</p>
-  <table>
-    <tr><th>Platform</th><th>Status</th></tr>
-    <tr><td>Windows x64</td><td>built and tested</td></tr>
-    <tr><td>macOS (Apple Silicon)</td><td>built and tested</td></tr>
-    <tr><td>macOS (Intel)</td><td>built and tested</td></tr>
-    <tr><td>macOS universal</td><td>both architectures in one binary</td></tr>
-    <tr><td>Linux x64</td><td>built and tested</td></tr>
-  </table>
-  <p class="note">Installers are not signed yet, so macOS will refuse the first
-     launch and Windows will show a SmartScreen warning until code signing is in
-     place.</p>
+  <p>One self-contained application &mdash; no Python, no compiler, no MKL to
+     install. Every build is checked in CI against a matrix whose spectrum is
+     known analytically, and the Python and GUI test suites run on all four
+     platform targets before a build is produced.</p>
+  __DOWNLOAD_TABLE__
+  <p class="note">The builds are not code-signed yet. macOS will refuse to open
+     a downloaded application until you right-click it and choose <em>Open</em>
+     (or run <code>xattr -dr com.apple.quarantine FEAST.app</code>), and Windows
+     will show a SmartScreen warning. Signing certificates are on the list.</p>
+</section>
+
+<section class="panel">
+  <h2>What is in it</h2>
+  <ul>
+    <li>Every problem FEAST ships as a built-in example &mdash; from the 4&times;4
+        in the user guide to a 49,192-row benzene molecule &mdash; each with the
+        settings from its own <code>.in</code> file.</li>
+    <li>Six views: the matrix itself, the spectrum, the rational filter and its
+        contour, per-eigenvalue accuracy, the eigenvectors, and convergence.</li>
+    <li>Hermitian interval searches, non-Hermitian searches over a disc in the
+        complex plane, and polynomial (quadratic) problems.</li>
+    <li>Every algorithmic option FEAST offers, explained in plain English.</li>
+  </ul>
 </section>
 
 <section class="panel">
   <h2>Source</h2>
   <p>The solver, the Python interface, the application and this site build from
      one repository. The FEAST 4.0 sources in <code>4.0/</code> are unmodified.</p>
-  <pre><code>bash build/build-feast.sh     # builds libfeast for this platform
+  <pre><code>bash build/build-spike.sh     # optional: unlocks the banded routines
+bash build/build-feast.sh     # builds libfeast for this platform
 bash build/run-test.sh        # checks it against a known spectrum
 python gui/app.py             # runs the desktop app</code></pre>
 </section>
@@ -375,8 +435,10 @@ CALCULATOR = """
       <button id="load-sample" type="button">Load</button>
     </div>
     <p class="hint">Matrix Market, or bare coordinate format
-       (<code>rows cols nnz</code>, then <code>i j value</code>). Symmetric or
-       Hermitian only.</p>
+       (<code>rows cols nnz</code>, then <code>i j value</code>, or
+       <code>i j re im</code> for complex). Real symmetric or complex Hermitian
+       &mdash; the calculator searches an interval, so the eigenvalues must be
+       real. The desktop app also searches a disc in the complex plane.</p>
     <textarea id="matrix" spellcheck="false"
       placeholder="200 200 598&#10;1 1 2.0&#10;1 2 -1.0&#10;..."></textarea>
 
@@ -453,6 +515,8 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     for href, title, desc, body in PAGES:
         extra_head = '<script defer src="calculator.js"></script>' if href == "calculator.html" else ""
+        if "__DOWNLOAD_TABLE__" in body:
+            body = body.replace("__DOWNLOAD_TABLE__", _download_table())
         (OUT / href).write_text(
             render(href, title, desc, body, head_extra=extra_head),
             encoding="utf-8")
