@@ -172,6 +172,39 @@ for the C `MPI_IN_PLACE`. Measured on real hardware with MS-MPI:
 -- identical to Apple Silicon, banded included. The four failures are the
 polynomial pair that needs MKL on every platform.
 
+## Full-feature builds: the original's 36/36, on every OS
+
+The two polynomial examples fail on every MKL-free build because they need the
+direct PARDISO solver. With MKL 2021.4 they pass -- and that build now exists
+on every platform, not only Linux:
+
+| configuration | examples | where proven |
+|---|---|---|
+| Linux + MKL + SPIKE | **36/36** | CI, and by hand before it |
+| Windows + MKL + SPIKE | **36/36** | real hardware (mingw gfortran linked directly against `mkl_rt.1.dll`) |
+| macOS Intel + MKL + SPIKE | **36/36** | CI |
+| Apple Silicon | 34/36 native; the Intel MKL kit **runs translated under Rosetta 2 -- measured on an M1, PASS at 5.2e-16** | real hardware |
+
+Three findings made this possible, each recorded in the build scripts:
+
+1. **Windows never needed Intel Fortran.** `mkl_rt.1.dll` exports the
+   gfortran-convention names (`dgemm_`, `pardiso_`, `mkl_dcsrmm_`), and
+   binutils links directly against a DLL. The pip wheel `mkl==2021.4.0`
+   carries the complete runtime.
+2. **The one real ABI gap is `zdotc`/`cdotc`** (complex-returning BLAS,
+   36 call sites). `build/mkl_gfortran_abi_compat.c` provides both with
+   gfortran's convention by construction, forwarding to MKL's pointer-based
+   CBLAS.
+3. **MKL 2021 predates Intel's Rosetta block** (2022+ refuses to run
+   translated), and 2021.4 is simultaneously the newest MKL that still has
+   the sparse routines FEAST calls. The version FEAST needs is exactly the
+   version Apple Silicon can still run.
+
+The full-feature Developer Kits (`FEAST-devkit-<os>-mkl`) bundle the MKL
+runtime -- redistribution is permitted by Intel's Simplified Software
+License -- plus the gfortran runtime on macOS, with install names rewritten
+so the kit runs on a machine with nothing installed.
+
 ## Routine coverage, by platform
 
 Identical on all four: **140 of 140** non-MPI entry points are present in the
