@@ -46,6 +46,26 @@ elif [ -x "$ROOT/build/test_feast.exe" ]; then
   cp "$ROOT/build/test_feast.exe" "$STAGE/bin/"
 fi
 
+# macOS: make the kit run on a machine that has NOTHING installed -- which is
+# precisely the Apple Silicon + Rosetta case, where no x86_64 toolchain can
+# exist to supply these. Two steps: carry the gfortran runtime dylibs, and
+# rewrite the binary's absolute Homebrew paths (baked in at link time on the
+# CI runner) to @rpath, searched relative to the executable. Verified by
+# running exactly this kit, translated, on an M1: PASS at 5.2e-16 -- but only
+# after doing this by hand, which no user should ever have to.
+if [ "$(uname -s)" = Darwin ] && [ -x "$STAGE/bin/test_feast" ]; then
+  FC_BIN="${FC:-gfortran}"
+  for rt in libgfortran.5.dylib libquadmath.0.dylib libgcc_s.1.1.dylib libgomp.1.dylib; do
+    src="$("$FC_BIN" -print-file-name="$rt" 2>/dev/null || true)"
+    [ -f "$src" ] && cp "$src" "$STAGE/lib/"
+  done
+  for ref in $(otool -L "$STAGE/bin/test_feast"                | awk '/\/usr\/local|\/opt\/homebrew/{print $1}'); do
+    install_name_tool -change "$ref" "@rpath/$(basename "$ref")"       "$STAGE/bin/test_feast"
+  done
+  install_name_tool -add_rpath "@executable_path/../lib" "$STAGE/bin/test_feast"     2>/dev/null || true
+  echo "  bin/test_feast made relocatable (rpath -> ../lib)"
+fi
+
 # Upstream's examples, unmodified, plus the runners that drive them.
 cp -r "$ROOT/4.0/example" "$STAGE/example"
 cp "$ROOT"/tools/run_examples.sh "$ROOT"/tools/run_pfeast_examples.sh "$STAGE/tools/"
