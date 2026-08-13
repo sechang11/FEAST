@@ -44,6 +44,29 @@ if OS_TAG == "windows":
     else:
         print(f"WARNING: {mingw} not found; the bundle may not load libfeast")
 
+# macOS: ship the OpenBLAS libfeast was linked against. It is not Homebrew's --
+# that build is threaded with pthreads and makes 8 of the 10 banded examples
+# fail on Apple Silicon -- so the build uses conda-forge's openmp_ variant,
+# which lives outside any path a packaged app can rely on. libfeast records it
+# as @rpath/libopenblas.0.dylib, and without the file beside it the bundle
+# builds happily and then cannot load the solver at all.
+if OS_TAG == "macos":
+    blas_prefix = os.environ.get("FEAST_BLAS_PREFIX", "")
+    if blas_prefix:
+        lib_dir = Path(blas_prefix) / "lib"
+        wanted = ("libopenblas", "libgfortran", "libquadmath", "libgcc_s",
+                  "libgomp", "libomp")
+        found = [p for p in lib_dir.glob("*.dylib")
+                 if p.name.startswith(wanted)]
+        for so in found:
+            binaries.append((str(so), "."))
+        print(f"bundling {len(found)} BLAS/runtime dylibs from {lib_dir}")
+    else:
+        # A local build against Homebrew still works for everything the app
+        # itself does; only the banded routines are affected.
+        print("FEAST_BLAS_PREFIX not set; assuming libfeast's BLAS is already "
+              "on a path the bundle can resolve")
+
 # FEAST's sample matrices back the built-in problems. Ship all of them, so the
 # catalogue in feastpy/problems.py is not full of entries that vanish once the
 # app is packaged. That includes the 68 MB benzene pair: it compresses well and
