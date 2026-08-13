@@ -78,6 +78,7 @@ jobs:
             mingw-w64-x86_64-gcc-fortran
             mingw-w64-x86_64-openblas
             mingw-w64-x86_64-gcc
+            make
 
       # SPIKE unlocks the 20 banded routines. It is fetched from
       # spike-solver.org, whose only working URL is undocumented, so a failure
