@@ -54,55 +54,57 @@ Source: CI, one run, all four platforms. The macOS ARM column is discussed below
 
 ## PFEAST's 44 distributed examples
 
-Measured on the M1 (OpenMPI 5.0.10, 2 ranks). Linux was last measured before
-the runner fixes and is not comparable; Windows cannot run PFEAST at all.
+Identical on every platform: **40 passed, 4 failed, 0 skipped** on Linux
+(CI, OpenMPI), macOS Apple Silicon (M1 and CI, OpenMPI), and Windows (real
+hardware, MS-MPI with the `MPI_IN_PLACE` shim). The four failures are the
+polynomial pair that needs MKL, failing the same way everywhere.
 
 | example | macOS ARM | Linux | Windows |
 |---|---|---|---|
-| `3PCsparse_pzfeast_hcsrev.c` | pass | not re-measured | cannot run |
-| `3PF90sparse_pzfeast_hcsrev.f90` | pass | not re-measured | cannot run |
-| `PCbanded_dfeast_gbgv.c` | pass | not re-measured | cannot run |
-| `PCbanded_dfeast_sbgv.c` | pass | not re-measured | cannot run |
-| `PCbanded_zfeast_hbev.c` | pass | not re-measured | cannot run |
-| `PCbanded_zfeast_sbev.c` | pass | not re-measured | cannot run |
-| `PCdense_dfeast_gegv.c` | pass | not re-measured | cannot run |
-| `PCdense_dfeast_sygv.c` | pass | not re-measured | cannot run |
-| `PCdense_dfeast_sypev.c` | pass | not re-measured | cannot run |
-| `PCdense_zfeast_heev.c` | pass | not re-measured | cannot run |
-| `PCdense_zfeast_syev.c` | pass | not re-measured | cannot run |
-| `PCsparse_dfeast_gcsrgv.c` | pass | not re-measured | cannot run |
-| `PCsparse_dfeast_scsrgv.c` | pass | not re-measured | cannot run |
-| `PCsparse_dfeast_scsrgv_lowest.c` | pass | not re-measured | cannot run |
-| `PCsparse_dfeast_scsrpev.c` | info | not re-measured | cannot run |
-| `PCsparse_pdfeast_gcsrgv.c` | pass | not re-measured | cannot run |
-| `PCsparse_pdfeast_scsrgv.c` | pass | not re-measured | cannot run |
-| `PCsparse_pdfeast_scsrgv_lowest.c` | pass | not re-measured | cannot run |
-| `PCsparse_pdfeast_scsrpev.c` | info | not re-measured | cannot run |
-| `PCsparse_pzfeast_hcsrev.c` | pass | not re-measured | cannot run |
-| `PCsparse_pzfeast_scsrev.c` | pass | not re-measured | cannot run |
-| `PCsparse_zfeast_hcsrev.c` | pass | not re-measured | cannot run |
-| `PCsparse_zfeast_scsrev.c` | pass | not re-measured | cannot run |
-| `PF90banded_dfeast_gbgv.f90` | pass | not re-measured | cannot run |
-| `PF90banded_dfeast_sbgv.f90` | pass | not re-measured | cannot run |
-| `PF90banded_zfeast_hbev.f90` | pass | not re-measured | cannot run |
-| `PF90banded_zfeast_sbev.f90` | pass | not re-measured | cannot run |
-| `PF90dense_dfeast_gegv.f90` | pass | not re-measured | cannot run |
-| `PF90dense_dfeast_sygv.f90` | pass | not re-measured | cannot run |
-| `PF90dense_dfeast_sypev.f90` | pass | not re-measured | cannot run |
-| `PF90dense_zfeast_heev.f90` | pass | not re-measured | cannot run |
-| `PF90dense_zfeast_syev.f90` | pass | not re-measured | cannot run |
-| `PF90sparse_dfeast_gcsrgv.f90` | pass | not re-measured | cannot run |
-| `PF90sparse_dfeast_scsrgv.f90` | pass | not re-measured | cannot run |
-| `PF90sparse_dfeast_scsrgv_lowest.f90` | pass | not re-measured | cannot run |
-| `PF90sparse_dfeast_scsrpev.f90` | info | not re-measured | cannot run |
-| `PF90sparse_pdfeast_gcsrgv.f90` | pass | not re-measured | cannot run |
-| `PF90sparse_pdfeast_scsrgv.f90` | pass | not re-measured | cannot run |
-| `PF90sparse_pdfeast_scsrgv_lowest.f90` | pass | not re-measured | cannot run |
-| `PF90sparse_pdfeast_scsrpev.f90` | info | not re-measured | cannot run |
-| `PF90sparse_pzfeast_hcsrev.f90` | pass | not re-measured | cannot run |
-| `PF90sparse_pzfeast_scsrev.f90` | pass | not re-measured | cannot run |
-| `PF90sparse_zfeast_hcsrev.f90` | pass | not re-measured | cannot run |
-| `PF90sparse_zfeast_scsrev.f90` | pass | not re-measured | cannot run |
+| `3PCsparse_pzfeast_hcsrev.c` | pass | pass | pass |
+| `3PF90sparse_pzfeast_hcsrev.f90` | pass | pass | pass |
+| `PCbanded_dfeast_gbgv.c` | pass | pass | pass |
+| `PCbanded_dfeast_sbgv.c` | pass | pass | pass |
+| `PCbanded_zfeast_hbev.c` | pass | pass | pass |
+| `PCbanded_zfeast_sbev.c` | pass | pass | pass |
+| `PCdense_dfeast_gegv.c` | pass | pass | pass |
+| `PCdense_dfeast_sygv.c` | pass | pass | pass |
+| `PCdense_dfeast_sypev.c` | pass | pass | pass |
+| `PCdense_zfeast_heev.c` | pass | pass | pass |
+| `PCdense_zfeast_syev.c` | pass | pass | pass |
+| `PCsparse_dfeast_gcsrgv.c` | pass | pass | pass |
+| `PCsparse_dfeast_scsrgv.c` | pass | pass | pass |
+| `PCsparse_dfeast_scsrgv_lowest.c` | pass | pass | pass |
+| `PCsparse_dfeast_scsrpev.c` | info | info | info |
+| `PCsparse_pdfeast_gcsrgv.c` | pass | pass | pass |
+| `PCsparse_pdfeast_scsrgv.c` | pass | pass | pass |
+| `PCsparse_pdfeast_scsrgv_lowest.c` | pass | pass | pass |
+| `PCsparse_pdfeast_scsrpev.c` | info | info | info |
+| `PCsparse_pzfeast_hcsrev.c` | pass | pass | pass |
+| `PCsparse_pzfeast_scsrev.c` | pass | pass | pass |
+| `PCsparse_zfeast_hcsrev.c` | pass | pass | pass |
+| `PCsparse_zfeast_scsrev.c` | pass | pass | pass |
+| `PF90banded_dfeast_gbgv.f90` | pass | pass | pass |
+| `PF90banded_dfeast_sbgv.f90` | pass | pass | pass |
+| `PF90banded_zfeast_hbev.f90` | pass | pass | pass |
+| `PF90banded_zfeast_sbev.f90` | pass | pass | pass |
+| `PF90dense_dfeast_gegv.f90` | pass | pass | pass |
+| `PF90dense_dfeast_sygv.f90` | pass | pass | pass |
+| `PF90dense_dfeast_sypev.f90` | pass | pass | pass |
+| `PF90dense_zfeast_heev.f90` | pass | pass | pass |
+| `PF90dense_zfeast_syev.f90` | pass | pass | pass |
+| `PF90sparse_dfeast_gcsrgv.f90` | pass | pass | pass |
+| `PF90sparse_dfeast_scsrgv.f90` | pass | pass | pass |
+| `PF90sparse_dfeast_scsrgv_lowest.f90` | pass | pass | pass |
+| `PF90sparse_dfeast_scsrpev.f90` | info | info | info |
+| `PF90sparse_pdfeast_gcsrgv.f90` | pass | pass | pass |
+| `PF90sparse_pdfeast_scsrgv.f90` | pass | pass | pass |
+| `PF90sparse_pdfeast_scsrgv_lowest.f90` | pass | pass | pass |
+| `PF90sparse_pdfeast_scsrpev.f90` | info | info | info |
+| `PF90sparse_pzfeast_hcsrev.f90` | pass | pass | pass |
+| `PF90sparse_pzfeast_scsrev.f90` | pass | pass | pass |
+| `PF90sparse_zfeast_hcsrev.f90` | pass | pass | pass |
+| `PF90sparse_zfeast_scsrev.f90` | pass | pass | pass |
 
 **macOS ARM: 40 passed, 4 failed, 0 skipped.**
 
