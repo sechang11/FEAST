@@ -129,10 +129,10 @@ The full per-example record is in
      a stripped environment before it is published. The Apple Silicon Rosetta
      result and the Windows PFEAST result were measured on physical machines,
      because no CI runner could have told us.</p>
-  <p>Three toolchain defects had to be fixed to reach these numbers, and all
-     three are documented with their fixes in the Developer Kits: four wrong
-     prototypes in FEAST's own <code>feast_tools.h</code>, a compiler-directive
-     gap that silently corrupts <code>MPI_IN_PLACE</code> under gfortran with
-     Microsoft MPI, and a complex-return ABI mismatch against MKL.</p>
+  <p>Reaching these numbers took three toolchain fixes, all of which ship with
+     their source in the Developer Kits: a C-prototype correction applied in
+     our binding, a translation shim for <code>MPI_IN_PLACE</code> under
+     gfortran with Microsoft MPI, and a complex-return ABI shim for MKL. Each
+     is explained in the kit's README, next to the code.</p>
 </section>
 """
