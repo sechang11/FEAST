@@ -318,6 +318,25 @@ def _download_table() -> str:
                    "and pass all 36 upstream examples, direct solver "
                    "included.</p><table>" + "".join(dk_rows) + "</table>")
 
+    # Checksums, when a manifest has been published alongside the site. Worth
+    # doing here specifically because these downloads are hosted off-site:
+    # anyone can verify what they got matches what we built, which is the one
+    # guarantee a third-party host cannot give you.
+    if cfg.get("checksums"):
+        dk_html += (f'<h2>Verifying a download</h2><p>Every file above is '
+                    f'listed with its SHA-256 in '
+                    f'<a href="{cfg["checksums"]}">{cfg["checksums"]}</a>. '
+                    f'To check one:</p>'
+                    f'<pre><code>shasum -a 256 FEAST-windows-x64.zip   '
+                    f'# macOS / Linux\n'
+                    f'certutil -hashfile FEAST-windows-x64.zip SHA256  '
+                    f'# Windows</code></pre>'
+                    f'<p class="note">These builds are not code-signed yet, so '
+                    f'macOS will refuse the first launch (right-click &rarr; '
+                    f'<em>Open</em>) and Windows will show a SmartScreen '
+                    f'warning. The checksums are how you confirm a file is the '
+                    f'one we published in the meantime.</p>')
+
     tail = ""
     if not any_link:
         tail = (f'<p class="note">Builds exist and are tested on every platform '
@@ -542,6 +561,16 @@ PAGES = [
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
+
+    # The checksum manifest lives with the built release and is served from
+    # the site. Copy it on every build: the download page links to it, and a
+    # link to a file that is not there is worse than no link at all. Railway
+    # regenerates the site at startup, so this runs there too.
+    manifest = HERE.parent / "release" / "upload-these" / "SHA256SUMS.txt"
+    if manifest.is_file():
+        (OUT / "SHA256SUMS.txt").write_text(
+            manifest.read_text(encoding="utf-8"), encoding="utf-8")
+        print(f"  {OUT / 'SHA256SUMS.txt'}")
     for href, title, desc, body in PAGES:
         extra_head = '<script defer src="calculator.js"></script>' if href == "calculator.html" else ""
         if "__DOWNLOAD_TABLE__" in body:

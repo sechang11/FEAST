@@ -47,44 +47,45 @@
     {
       "name": "Developer Kit \u2014 Windows x64",
       "note": "libfeast + libspike + libpfeast, headers, all 80 examples. ~5 MB.",
-      "file": null,
-      "size": ""
+      "file": "https://drive.google.com/file/d/1HrxnnUh_PHpQnjQSL2sAjeQoyL5IGzyO/view?usp=sharing",
+      "size": "4 MB"
     },
     {
       "name": "Developer Kit \u2014 Linux x64",
       "note": "Same contents, Linux build. ~5 MB.",
-      "file": null,
-      "size": ""
+      "file": "https://drive.google.com/file/d/1mE16USHOQqv93VymQorffxE9B7vLZ4s0/view?usp=sharing",
+      "size": "4 MB"
     },
     {
       "name": "Developer Kit \u2014 macOS Apple Silicon",
       "note": "Same contents, native arm64. ~5 MB.",
-      "file": null,
-      "size": ""
+      "file": "https://drive.google.com/file/d/19JjzoTxn1sBkR6QePs7LO52Ucrz6k6Zx/view?usp=sharing",
+      "size": "5 MB"
     },
     {
       "name": "Developer Kit \u2014 macOS Intel",
       "note": "Same contents, x86_64. ~6 MB.",
-      "file": null,
-      "size": ""
+      "file": "https://drive.google.com/file/d/19BwwtxFZYus2sIfRA9iP3QLVkaFt-XGY/view?usp=sharing",
+      "size": "6 MB"
     },
     {
       "name": "Full-feature Kit \u2014 Windows x64 (MKL)",
       "note": "MKL 2021.4 bundled: direct PARDISO solver, all 36 upstream examples pass.",
-      "file": null,
+      "file": "https://drive.google.com/file/d/12RcQmcROUIlUNY7ILRCkXZtOBUJbTLlo/view?usp=sharing",
       "size": "222 MB"
     },
     {
       "name": "Full-feature Kit \u2014 Linux x64 (MKL)",
       "note": "MKL 2021.4 bundled: 36/36.",
-      "file": null,
-      "size": "374 MB"
+      "file": "https://drive.google.com/file/d/1z6QX49xNw52KKjX5y8bb_Gl_KgK96Vqo/view?usp=sharing",
+      "size": "373 MB"
     },
     {
       "name": "Full-feature Kit \u2014 macOS Intel (MKL)",
       "note": "MKL 2021.4 bundled: 36/36 natively; on Apple Silicon runs under Rosetta 2 (measured).",
-      "file": null,
-      "size": "261 MB"
+      "file": "https://drive.google.com/file/d/1tJTI7EMdKOTiTLD9PCD_Cv5mVxT7EHtA/view?usp=sharing",
+      "size": "260 MB"
     }
-  ]
+  ],
+  "checksums": "SHA256SUMS.txt"
 }
