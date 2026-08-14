@@ -13,6 +13,8 @@ from __future__ import annotations
 import html
 from pathlib import Path
 
+from compat_page import COMPATIBILITY  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "static"
 
@@ -22,6 +24,7 @@ NAV = [
     ("calculator.html", "Calculator"),
     ("documentation.html", "Documentation"),
     ("download.html", "Download"),
+    ("compatibility.html", "Compatibility"),
     ("license.html", "License"),
     ("references.html", "References"),
     ("contact.html", "Contact"),
@@ -553,6 +556,9 @@ PAGES = [
     ("calculator.html", "Calculator", "Free online FEAST eigenvalue calculator, running the real library.", CALCULATOR),
     ("documentation.html", "Documentation", "How to choose a FEAST routine and set its parameters.", DOCUMENTATION),
     ("download.html", "Download", "Download the FEAST desktop application and source.", DOWNLOAD),
+    ("compatibility.html", "Compatibility",
+     "Measured results for every FEAST example on every platform we build.",
+     COMPATIBILITY),
     ("license.html", "License", "FEAST is distributed under the BSD licence.", LICENSE),
     ("references.html", "References", "Papers describing the FEAST algorithm.", REFERENCES),
     ("contact.html", "Contact", "Who maintains FEAST and this distribution.", CONTACT),
@@ -566,6 +572,13 @@ def main():
     # the site. Copy it on every build: the download page links to it, and a
     # link to a file that is not there is worse than no link at all. Railway
     # regenerates the site at startup, so this runs there too.
+    # The full per-example record, linked from the Compatibility page.
+    record = HERE.parent / "COMPATIBILITY.md"
+    if record.is_file():
+        (OUT / "COMPATIBILITY.md").write_text(
+            record.read_text(encoding="utf-8"), encoding="utf-8")
+        print(f"  {OUT / 'COMPATIBILITY.md'}")
+
     manifest = HERE.parent / "release" / "upload-these" / "SHA256SUMS.txt"
     if manifest.is_file():
         (OUT / "SHA256SUMS.txt").write_text(
