@@ -32,10 +32,10 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    # 45 was not enough once the PFEAST examples joined: the macOS Intel
-    # runner is the slowest of the four and its job was cancelled at the cap
-    # three times, which reads as infrastructure flakiness and is not.
-    timeout-minutes: 75
+    # 45 was not enough once PFEAST joined; 75 was not either, because the
+    # macOS Intel runner needed 76. With the example suite now Linux-only the
+    # job is back under half an hour, and this is headroom rather than a race.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -177,14 +177,18 @@ jobs:
         run: |
           bash build/build-pfeast.sh --arch ${{ matrix.arch }}             --mpifc gfortran --mpi-inc /mingw64/include
 
-      - name: Run PFEAST examples (Unix)
-        if: runner.os != 'Windows'
+      # Linux only. Capping the per-example timeout was not enough: 44
+      # examples on the macOS Intel runner took 76 minutes and the job was
+      # killed at its cap, which also skipped the Developer Kit that comes
+      # after it -- so the slowest platform was the one that produced nothing.
+      # Building libpfeast above already proves it compiles everywhere; this
+      # step is a numerical regression guard, and one fast platform provides
+      # it. The per-platform numbers are measured and recorded in
+      # COMPATIBILITY.md (40/44, identical on Linux, macOS and Windows).
+      - name: Run PFEAST examples (Linux only -- see note)
+        if: matrix.arch == 'linux-x64'
         continue-on-error: true
-        # 420s x 44 examples is an hour in the worst case. This run is
-        # informational -- the authoritative numbers are the measured ones in
-        # COMPATIBILITY.md -- so cap it low enough to stay a check rather than
-        # become the job.
-        run: RUN_TIMEOUT=150 bash tools/run_pfeast_examples.sh ${{ matrix.arch }} 2 || true
+        run: RUN_TIMEOUT=300 bash tools/run_pfeast_examples.sh ${{ matrix.arch }} 2 || true
 
       # The Developer Kit: libfeast+libspike+libpfeast, headers, all 80
       # upstream examples, runners and build scripts with the shims. Built
