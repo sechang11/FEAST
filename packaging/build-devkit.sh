@@ -74,9 +74,20 @@ cp "$ROOT"/tools/run_examples.sh "$ROOT"/tools/run_pfeast_examples.sh "$STAGE/to
 # (or build PFEAST where CI could not) with the traps already solved.
 cp "$ROOT"/build/build-feast.sh "$ROOT"/build/build-spike.sh \
    "$ROOT"/build/build-pfeast.sh "$ROOT"/build/run-test.sh "$STAGE/build/"
-cp "$ROOT"/build/spike_blas_compat.f90 "$ROOT"/build/msmpi_inplace_compat.c \
-   "$ROOT"/build/mkl_gfortran_abi_compat.c \
-   "$STAGE/build/" 2>/dev/null || true
+# One at a time, and loudly. These were copied by a single cp ending in
+# "|| true", which silently produced kits missing a shim: six of the seven
+# published kits shipped without mkl_gfortran_abi_compat.c because they were
+# built from a checkout predating it, and nothing in the build said so. A kit
+# that quietly lacks a shim hands whoever rebuilds against MKL a wrong zdotc,
+# so a missing one has to be an error rather than a shrug.
+for shim in spike_blas_compat.f90 msmpi_inplace_compat.c mkl_gfortran_abi_compat.c; do
+  if [ -f "$ROOT/build/$shim" ]; then
+    cp "$ROOT/build/$shim" "$STAGE/build/"
+  else
+    echo "build-devkit: missing build/$shim -- the kit would ship incomplete" >&2
+    exit 1
+  fi
+done
 
 # The full-feature variant carries MKL's runtime alongside the libraries.
 # Intel's Simplified Software License permits redistributing the runtime, and
