@@ -9,13 +9,13 @@ c6cf1d825aedb822189bc05e1c2eca4d25db4fd2bed8c325ebe606f9c150a296  FEAST-windows-
 
 ## Developer Kits (libraries, headers, all 80 upstream examples)
 
-7c8bce245b837b9377cbbb15733352520114e295128fc4ffb20d0424aca7ec38  FEAST-devkit-linux-x64.tar.gz  (4 MB)
-4e604094d94dfb552ddbcea2ba0932c226bdf9d1aa892292e2364def648c6008  FEAST-devkit-macos-arm64.tar.gz  (5 MB)
-3865bb2d7bccb04f76c3405afa80a91897ed33c1cc0dd302fab051807ec6dffa  FEAST-devkit-macos-x64.tar.gz  (6 MB)
-e647cce63e0b649e5baef0a42880c98ddc70e8e95fdca5eb747bfc2696ad89ff  FEAST-devkit-windows-x64.zip  (4 MB)
+e989a2d58ca189f37cf831be26a406b3b579a26cd602042f8f53748db1e23ac1  FEAST-devkit-linux-x64.tar.gz  (4 MB)
+9c50279b2b6fd17af0bbc723049c696b8d5c6df407e22c64425932b23133fecb  FEAST-devkit-macos-arm64.tar.gz  (5 MB)
+cef30d04a9516759cd1317ce914450b9acda802b951f09235ce17b1cca009120  FEAST-devkit-macos-x64.tar.gz  (6 MB)
+b81d51fdd9c36e4524d192ee491641fe60f46d7490c156b8c190a8489349862e  FEAST-devkit-windows-x64.zip  (4 MB)
 
 ## Full-feature Kits (MKL 2021.4 bundled -- upstream's 36/36)
 
-82f8d1cd56602e71b9f7caa5399f00e52f14317c45ae9bdc5045bfa35995ae89  FEAST-devkit-linux-x64-mkl.tar.gz  (373 MB)
-29e14cabb6e1ebc1fe412d008dcf086ff680a5d37fc4ed0afc2e236826e40f22  FEAST-devkit-macos-x64-mkl.tar.gz  (260 MB)
-def2f0d4419b7be00df25c6624d737a9ae9c06f794592a16267977c5abf68672  FEAST-devkit-windows-x64-mkl.zip  (222 MB)
+b071c3d7cb5b332f7b6cc9075cde9a6da9f92a6c1ca559d3c48c8158f57b8c7a  FEAST-devkit-linux-x64-mkl.tar.gz  (373 MB)
+9e0d5cfa22197b56d3a25becc729374be3140540fa95d2dd6f6d5c4b63130e9d  FEAST-devkit-macos-x64-mkl.tar.gz  (260 MB)
+fa91883bf506093baf5b2cbb3d13369ec1045dc29d7ab8fd7e7cc16f9a858667  FEAST-devkit-windows-x64-mkl.zip  (222 MB)
