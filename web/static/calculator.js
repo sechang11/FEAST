@@ -2,24 +2,40 @@
  *
  * Talks to the same feastpy code path the desktop app uses; this file only
  * moves text around and draws the result.
+ *
+ * Two search regions, because FEAST has two. A Hermitian matrix has real
+ * eigenvalues, so the region is an interval of the real line. A non-Hermitian
+ * one does not, so the region is a disc of the complex plane and the answers
+ * come back complex. Nearly everything below that looks like a branch is that
+ * one distinction working its way outward.
  */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
 let lastResult = null;
 
+const mode = () => $("mode").value;
+const isDisc = () => mode() === "disc";
+
 function payload() {
   const b = $("bmatrix").value.trim();
-  return {
+  const p = {
     matrix: $("matrix").value,
     b_matrix: b ? b : null,
-    emin: parseFloat($("emin").value),
-    emax: parseFloat($("emax").value),
     m0: parseInt($("m0").value, 10) || 40,
     contour_points: parseInt($("cp").value, 10) || 8,
     tol_exponent: parseInt($("tol").value, 10) || 12,
     max_loops: 20,
   };
+  if (isDisc()) {
+    p.center_re = parseFloat($("cre").value) || 0;
+    p.center_im = parseFloat($("cim").value) || 0;
+    p.radius = parseFloat($("rad").value);
+  } else {
+    p.emin = parseFloat($("emin").value);
+    p.emax = parseFloat($("emax").value);
+  }
+  return p;
 }
 
 async function post(path, body) {
@@ -29,8 +45,18 @@ async function post(path, body) {
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({ detail: res.statusText }));
-  if (!res.ok) throw new Error(data.detail || `request failed (${res.status})`);
+  if (!res.ok) throw new Error(detailText(data) || `request failed (${res.status})`);
   return data;
+}
+
+/* FastAPI validation errors arrive as a list of objects rather than a string;
+   rendering that raw puts "[object Object]" in front of the user. */
+function detailText(data) {
+  const d = data && data.detail;
+  if (!d) return "";
+  if (typeof d === "string") return d;
+  if (Array.isArray(d)) return d.map((e) => e.msg || JSON.stringify(e)).join("; ");
+  return String(d);
 }
 
 function setStatus(el, text, isError) {
@@ -40,6 +66,44 @@ function setStatus(el, text, isError) {
 
 function needMatrix() {
   if (!$("matrix").value.trim()) throw new Error("Paste a matrix first, or load a sample.");
+}
+
+// ---- search region ---------------------------------------------------------
+function applyMode() {
+  $("interval-box").hidden = isDisc();
+  $("disc-box").hidden = !isDisc();
+  $("results").hidden = true;
+  $("diagnosis").hidden = true;
+  setStatus($("solveinfo"), "");
+}
+$("mode").addEventListener("change", applyMode);
+
+/* Inspect knows whether the matrix is Hermitian, so it can pick the mode. When
+   it is not, the interval option is disabled outright: an interval search of a
+   non-Hermitian matrix is not a worse choice, it is a rejected request, and
+   letting someone select it only to be refused wastes the round trip.
+
+   `forcedDisc` remembers that *we* switched to a disc rather than the user, so
+   the switch can be undone when the next matrix is Hermitian. Without it the
+   mode leaks across matrices: load a non-Hermitian sample, then a Hermitian
+   one, and the second is solved with the first one's disc still in the boxes.
+   That does not error -- it returns a full set of wrong numbers. */
+let forcedDisc = false;
+
+function offerModes(hermitian) {
+  const opt = $("mode").querySelector('option[value="interval"]');
+  opt.disabled = !hermitian;
+  if (!hermitian) {
+    forcedDisc = true;
+    $("mode").value = "disc";
+    setStatus($("modeinfo"),
+      "not Hermitian — its eigenvalues are complex, so a disc it is");
+  } else {
+    if (forcedDisc) $("mode").value = "interval";
+    forcedDisc = false;
+    setStatus($("modeinfo"), "");
+  }
+  applyMode();
 }
 
 // ---- samples ---------------------------------------------------------------
@@ -52,8 +116,21 @@ $("load-sample").addEventListener("click", async () => {
     $("matrix").value = d.text;
     $("bmatrix").value = d.b_text || "";
     if (d.b_text) $("bwrap").open = true;
-    $("emin").value = d.emin;
-    $("emax").value = d.emax;
+    // A sample states its own mode, so set it outright rather than inferring:
+    // the sample knows what it is, and leaving the previous matrix's choice in
+    // place is how the wrong region gets used.
+    if (d.mode === "disc") {
+      offerModes(false);
+      $("cre").value = round4(d.center_re);
+      $("cim").value = round4(d.center_im);
+      $("rad").value = round4(d.radius);
+    } else {
+      offerModes(true);
+      $("mode").value = "interval";
+      applyMode();
+      $("emin").value = d.emin;
+      $("emax").value = d.emax;
+    }
     setStatus($("matinfo"), `${d.name}. ${d.note || ""}`);
   } catch (e) {
     setStatus($("matinfo"), e.message, true);
@@ -66,24 +143,41 @@ $("inspect").addEventListener("click", async () => {
     needMatrix();
     setStatus($("matinfo"), "reading…");
     const d = await post("/api/bounds", payload());
+    offerModes(d.hermitian);
+
+    let where;
+    if (d.hermitian && d.emin !== undefined) {
+      where = `all eigenvalues lie in [${fmt(d.emin)}, ${fmt(d.emax)}]`;
+    } else {
+      where = `all eigenvalues lie within ${fmt(d.radius)} of ${fmtC([d.center_re, d.center_im])}`;
+    }
     setStatus($("matinfo"),
       `${d.sparse ? "sparse" : "dense"} ${d.n}×${d.n}, ` +
       `${d.nnz.toLocaleString()} nonzeros` +
+      (d.complex ? ", complex" : "") +
       (d.generalized ? ", generalized" : "") +
-      ` — all eigenvalues lie in [${fmt(d.emin)}, ${fmt(d.emax)}]`);
-    // Offer the full range: guessing an interval blind is the main way to get
+      (d.hermitian ? ", Hermitian" : ", non-Hermitian") +
+      ` — ${where}`);
+
+    // Offer the whole spectrum: guessing a region blind is the main way to get
     // an empty result.
     if (!$("emin").dataset.touched) {
-      $("emin").value = d.emin;
-      $("emax").value = d.emax;
+      if (d.emin !== undefined) { $("emin").value = d.emin; $("emax").value = d.emax; }
+      $("cre").value = round4(d.center_re);
+      $("cim").value = round4(d.center_im);
+      $("rad").value = round4(d.radius);
     }
   } catch (e) {
     setStatus($("matinfo"), e.message, true);
   }
 });
 
-for (const id of ["emin", "emax"]) {
+for (const id of ["emin", "emax", "cre", "cim", "rad"]) {
   $(id).addEventListener("input", () => { $("emin").dataset.touched = "1"; });
+}
+
+function round4(x) {
+  return Number.isFinite(x) ? +x.toPrecision(4) : x;
 }
 
 // ---- estimate --------------------------------------------------------------
@@ -124,7 +218,17 @@ function fmt(x) {
   return Math.abs(x) < 1e-4 || Math.abs(x) >= 1e6 ? x.toExponential(4) : String(+x.toPrecision(8));
 }
 
+/* A complex number as a person writes it, from the [re, im] pair the API
+   sends for a disc search. */
+function fmtC(v) {
+  const [re, im] = v;
+  if (im === 0) return fmt(re);
+  const sign = im > 0 ? "+" : "−";
+  return `${fmt(re)} ${sign} ${fmt(Math.abs(im))}i`;
+}
+
 function render(d) {
+  const cx = !!d.complex_eigenvalues;
   setStatus($("solveinfo"),
     `${d.n_found} eigenvalue(s), ${d.loops} loop(s), ${d.seconds.toFixed(2)}s`);
 
@@ -140,15 +244,38 @@ function render(d) {
     diag.hidden = true;
   }
 
+  document.querySelector("#eigtable thead").innerHTML = cx
+    ? "<tr><th>#</th><th>real</th><th>imaginary</th><th>residual</th></tr>"
+    : "<tr><th>#</th><th>eigenvalue</th><th>residual</th></tr>";
+
   const tbody = document.querySelector("#eigtable tbody");
   tbody.innerHTML = d.eigenvalues
-    .map((v, i) => `<tr><td>${i + 1}</td><td>${fmt(v)}</td><td>${d.residuals[i].toExponential(2)}</td></tr>`)
+    .map((v, i) => {
+      const r = d.residuals[i].toExponential(2);
+      return cx
+        ? `<tr><td>${i + 1}</td><td>${fmt(v[0])}</td><td>${fmt(v[1])}</td><td>${r}</td></tr>`
+        : `<tr><td>${i + 1}</td><td>${fmt(v)}</td><td>${r}</td></tr>`;
+    })
     .join("");
-  $("summary").textContent = d.n_found
-    ? `found ${d.n_found} in [${fmt(parseFloat($("emin").value))}, ${fmt(parseFloat($("emax").value))}], M0=${d.m0_used}`
-    : "nothing found in this interval";
+
+  if (d.n_found) {
+    $("summary").textContent = cx
+      ? `found ${d.n_found} inside the disc of radius ${fmt(parseFloat($("rad").value))} about ` +
+        `${fmtC([parseFloat($("cre").value) || 0, parseFloat($("cim").value) || 0])}, M0=${d.m0_used}`
+      : `found ${d.n_found} in [${fmt(parseFloat($("emin").value))}, ${fmt(parseFloat($("emax").value))}], M0=${d.m0_used}`;
+  } else {
+    $("summary").textContent = cx ? "nothing found in this disc" : "nothing found in this interval";
+  }
+
   $("results").hidden = false;
-  drawPlot(d.eigenvalues);
+  if (cx) {
+    drawArgand(d.eigenvalues,
+      parseFloat($("cre").value) || 0,
+      parseFloat($("cim").value) || 0,
+      parseFloat($("rad").value));
+  } else {
+    drawPlot(d.eigenvalues);
+  }
 }
 
 function escapeHtml(s) {
@@ -180,11 +307,68 @@ function drawPlot(values) {
 </svg>`;
 }
 
+/* The complex plane, with the contour drawn on it.
+ *
+ * This is the picture the interval plot cannot show: the eigenvalues sitting
+ * off the real axis, and the circle FEAST integrated around to find exactly
+ * the ones inside it. Equal scale on both axes -- an anisotropic plot would
+ * draw the contour as an ellipse, which is a different algorithm.
+ */
+function drawArgand(values, cre, cim, rad) {
+  const host = $("plot");
+  if (!values.length && !Number.isFinite(rad)) { host.innerHTML = ""; return; }
+  const W = 640, H = 460, pad = 46;
+
+  // Frame everything: the contour and any eigenvalue, including ones outside
+  // it -- FEAST can return a slot just beyond the circle, and silently
+  // cropping it would hide the most interesting thing on the plot.
+  let lo = cre - rad, hi = cre + rad, blo = cim - rad, bhi = cim + rad;
+  for (const [re, im] of values) {
+    lo = Math.min(lo, re); hi = Math.max(hi, re);
+    blo = Math.min(blo, im); bhi = Math.max(bhi, im);
+  }
+  const cx = (lo + hi) / 2, cy = (blo + bhi) / 2;
+  const half = Math.max(hi - lo, bhi - blo, 1e-12) / 2 * 1.12;
+
+  const sc = (W - 2 * pad) / (2 * half);            // one scale, both axes
+  const X = (v) => pad + (v - (cx - half)) * sc;
+  const Y = (v) => H / 2 - (v - cy) * sc;           // imaginary axis points up
+
+  const dots = values.map(([re, im]) =>
+    `<circle cx="${X(re).toFixed(1)}" cy="${Y(im).toFixed(1)}" r="3.2" fill="var(--band)"/>`
+  ).join("");
+
+  const axisY = Y(0), axisX = X(0);
+  const inFrame = (v, a, b) => v >= a && v <= b;
+
+  host.innerHTML = `
+<svg viewBox="0 0 ${W} ${H}" role="img"
+     aria-label="${values.length} eigenvalues in the complex plane, with the search contour">
+  ${inFrame(axisY, 0, H) ? `<line x1="${pad}" y1="${axisY.toFixed(1)}" x2="${W - pad}" y2="${axisY.toFixed(1)}" stroke="currentColor" opacity=".28"/>` : ""}
+  ${inFrame(axisX, 0, W) ? `<line x1="${axisX.toFixed(1)}" y1="${pad * 0.4}" x2="${axisX.toFixed(1)}" y2="${H - pad * 0.6}" stroke="currentColor" opacity=".28"/>` : ""}
+  <circle cx="${X(cre).toFixed(1)}" cy="${Y(cim).toFixed(1)}" r="${(rad * sc).toFixed(1)}"
+          fill="var(--band)" fill-opacity=".08"
+          stroke="var(--band)" stroke-opacity=".85" stroke-width="1.6" stroke-dasharray="5 4"/>
+  <circle cx="${X(cre).toFixed(1)}" cy="${Y(cim).toFixed(1)}" r="2.5"
+          fill="none" stroke="currentColor" opacity=".5"/>
+  ${dots}
+  <text x="${W - pad}" y="${H - 12}" font-size="12" fill="currentColor" opacity=".7" text-anchor="end">real →</text>
+  <text x="${pad - 34}" y="${pad * 0.4 + 4}" font-size="12" fill="currentColor" opacity=".7">imag ↑</text>
+  <text x="${W / 2}" y="18" font-size="13" fill="currentColor" opacity=".75" text-anchor="middle">
+    ${values.length} eigenvalue(s) inside the contour
+  </text>
+</svg>`;
+}
+
 // ---- CSV -------------------------------------------------------------------
 $("download-csv").addEventListener("click", () => {
   if (!lastResult) return;
-  const rows = ["index,eigenvalue,residual"].concat(
-    lastResult.eigenvalues.map((v, i) => `${i + 1},${v},${lastResult.residuals[i]}`));
+  const cx = !!lastResult.complex_eigenvalues;
+  const head = cx ? "index,real,imaginary,residual" : "index,eigenvalue,residual";
+  const rows = [head].concat(
+    lastResult.eigenvalues.map((v, i) =>
+      cx ? `${i + 1},${v[0]},${v[1]},${lastResult.residuals[i]}`
+         : `${i + 1},${v},${lastResult.residuals[i]}`));
   const blob = new Blob([rows.join("\n")], { type: "text/csv" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);

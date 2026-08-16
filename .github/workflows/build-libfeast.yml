@@ -216,6 +216,10 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip numpy scipy PySide6 pyqtgraph psutil
+          # fastapi for the web backend; httpx is what TestClient drives it
+          # through, and its absence fails as a bare ImportError rather than
+          # as "install httpx", so it is named explicitly.
+          python -m pip install fastapi httpx
           # cryptography belongs to the licensing layer, which is inert until a
           # signing key is configured, and the package already runs without it.
           # It has no wheel for every platform/Python pair -- macOS-Intel with
@@ -244,6 +248,14 @@ jobs:
         shell: bash
         working-directory: python
         run: python -u test_feastpy.py
+
+      # The calculator has two search regions, and picking the wrong one is not
+      # an error -- it returns a full set of plausible wrong numbers. Worth its
+      # own suite for that reason alone.
+      - name: web API tests
+        shell: bash
+        working-directory: web
+        run: python -u test_server.py
 
       - name: Headless GUI check
         shell: bash

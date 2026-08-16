@@ -1623,12 +1623,27 @@ class MainWindow(QMainWindow):
             self._offer_fix(self.diagnosis)
 
     def _diagnose(self, r):
+        # The advice has to describe the region actually searched. Passing the
+        # interval unconditionally meant a disc search was told to "widen the
+        # interval" -- a control that is hidden in disc mode -- while the fix
+        # it needed, a larger radius, was never offered.
+        if self._geometry == problems.DISC:
+            region = {"center": self._centre, "radius": self._radius}
+            # `bounds` is read as (centre, radius) in disc mode, so handing it
+            # self.bounds -- an interval (lo, hi) -- would render a disc
+            # "about 0.18 of radius 1.0" out of two unrelated numbers. Compute
+            # the real bounding disc, or say nothing.
+            try:
+                bounds = feastpy.spectral_disc(self.matrix, self.b_matrix)
+            except Exception:
+                bounds = None
+        else:
+            region = {"emin": self.emin.value(), "emax": self.emax.value()}
+            bounds = self.bounds
         return diagnostics.diagnose(
             r, n=int(self.matrix.shape[0]), m0=self.m0.value(),
             contour_points=self.contour.value(), tol_exponent=self.tol.value(),
-            max_loops=self.loops.value(),
-            emin=self.emin.value(), emax=self.emax.value(),
-            bounds=self.bounds)
+            max_loops=self.loops.value(), bounds=bounds, **region)
 
     def apply_suggestion(self, sug) -> bool:
         """Apply a suggested parameter change. Returns True if anything changed."""

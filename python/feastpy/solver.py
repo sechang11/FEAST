@@ -463,6 +463,53 @@ def spectral_bounds(A, B=None) -> tuple[float, float]:
     return lo, hi
 
 
+def spectral_disc(A, B=None) -> tuple[complex, float]:
+    """Bracket the whole spectrum of a general A with one disc of the plane.
+
+    The complex-plane counterpart of `spectral_bounds`, and it exists for the
+    same reason: a non-Hermitian spectrum has no interval to search, so the
+    first question -- "where do I even point the contour?" -- needs an answer
+    before the user can do anything at all.
+
+    Gershgorin again, but not collapsed onto the real axis. Every eigenvalue
+    lies in some disc centred on a diagonal entry with radius the off-diagonal
+    row sum; a disc about `c` containing all of them therefore needs radius
+    max_i (|a_ii - c| + R_i). Taking c as the mean diagonal entry keeps that
+    radius near-minimal without an optimisation.
+
+    Loose by construction, like `spectral_bounds` -- these are the plot limits
+    to explore inside, not an answer. Returns (centre, radius).
+
+    For a generalized problem the discs bound A alone, so the containment
+    guarantee does not carry over to the pencil; the result is still a
+    reasonable place to start looking, and the caller should present it that
+    way rather than as a bound.
+    """
+    import numpy as np
+    import scipy.sparse as sp
+
+    if sp.issparse(A):
+        M = sp.csr_matrix(A)
+        diag = M.diagonal()
+        radius = np.asarray(abs(M).sum(axis=1)).ravel() - np.abs(diag)
+    else:
+        M = np.asarray(A)
+        diag = np.diag(M)
+        radius = np.abs(M).sum(axis=1) - np.abs(diag)
+
+    diag = np.asarray(diag)
+    radius = np.maximum(np.asarray(radius, dtype=float), 0.0)   # rounding
+    centre = complex(np.mean(diag)) if diag.size else 0j
+    r = float(np.max(np.abs(diag - centre) + radius)) if diag.size else 0.0
+
+    if not np.isfinite(r) or r <= 0.0:
+        # A diagonal matrix gives radius 0: a zero-radius contour encloses
+        # nothing and FEAST would return "no eigenvalues" for a problem whose
+        # answer is the diagonal itself. Give it something to enclose.
+        r = max(float(np.max(np.abs(diag))) if diag.size else 1.0, 1.0) * 1e-3
+    return centre, r * (1.0 + 1e-9)
+
+
 def estimate_count(A, emin: float, emax: float, B=None, *,
                    contour_points: int = 8, m0: Optional[int] = None) -> int:
     """Estimate how many eigenvalues lie in [emin, emax] without solving.

@@ -471,6 +471,13 @@ CALCULATOR = """
 <h1>Free eigenvalue calculator</h1>
 <p class="lead">This runs the real FEAST library &mdash; the same build the
    desktop app uses. Nothing is simulated or approximated for the web.</p>
+<p class="note">It covers the two eigenvalue problems: <strong>Hermitian</strong>
+   (searched along an interval of the real line) and <strong>non-Hermitian</strong>
+   (searched inside a disc of the complex plane). FEAST's nonlinear families
+   &mdash; nonlinear eigenvector and nonlinear eigenvalue problems &mdash; need
+   the reverse-communication interface, which a web form cannot express; those
+   live in the <a href="download.html">desktop application</a> and the Python
+   bindings, along with polynomial problems and matrices of any size.</p>
 
 <div id="app">
   <section class="panel">
@@ -482,14 +489,16 @@ CALCULATOR = """
         <option value="laplacian1d">1-D Laplacian, n=200 (known spectrum)</option>
         <option value="system1">FEAST sample system1 (generalized)</option>
         <option value="system3">FEAST sample system3 (generalized)</option>
+        <option value="grcar">Grcar, n=120 (non-Hermitian, complex spectrum)</option>
       </select>
       <button id="load-sample" type="button">Load</button>
     </div>
     <p class="hint">Matrix Market, or bare coordinate format
        (<code>rows cols nnz</code>, then <code>i j value</code>, or
-       <code>i j re im</code> for complex). Real symmetric or complex Hermitian
-       &mdash; the calculator searches an interval, so the eigenvalues must be
-       real. The desktop app also searches a disc in the complex plane.</p>
+       <code>i j re im</code> for complex). Hermitian matrices are searched
+       along an interval of the real line; non-Hermitian and complex-symmetric
+       ones are searched inside a disc of the complex plane. <em>Inspect
+       matrix</em> works out which applies and sets it for you.</p>
     <textarea id="matrix" spellcheck="false"
       placeholder="200 200 598&#10;1 1 2.0&#10;1 2 -1.0&#10;..."></textarea>
 
@@ -506,13 +515,38 @@ CALCULATOR = """
   </section>
 
   <section class="panel">
-    <h2>2. Your interval</h2>
+    <h2>2. Your search region</h2>
     <div class="row">
-      <label for="emin">E min</label><input id="emin" type="number" step="any" value="0">
-      <label for="emax">E max</label><input id="emax" type="number" step="any" value="0.02">
-      <button id="estimate" type="button">How many are in here?</button>
-      <span id="estinfo" class="status"></span>
+      <label for="mode">Search</label>
+      <select id="mode">
+        <option value="interval">an interval of the real line (Hermitian)</option>
+        <option value="disc">a disc of the complex plane (non-Hermitian)</option>
+      </select>
+      <span id="modeinfo" class="status"></span>
     </div>
+
+    <div id="interval-box">
+      <div class="row">
+        <label for="emin">E min</label><input id="emin" type="number" step="any" value="0">
+        <label for="emax">E max</label><input id="emax" type="number" step="any" value="0.02">
+        <button id="estimate" type="button">How many are in here?</button>
+        <span id="estinfo" class="status"></span>
+      </div>
+    </div>
+
+    <div id="disc-box" hidden>
+      <div class="row">
+        <label for="cre">Centre (real)</label><input id="cre" type="number" step="any" value="0">
+        <label for="cim">Centre (imag)</label><input id="cim" type="number" step="any" value="0">
+        <label for="rad">Radius</label><input id="rad" type="number" step="any" value="1" min="0">
+      </div>
+      <p class="hint">A non-Hermitian spectrum does not lie on a line, so there
+         is no interval to search. FEAST integrates around the circle instead
+         and returns every eigenvalue enclosed by it. There is no quick count
+         for a disc &mdash; the estimator is defined for the Hermitian
+         routines only &mdash; so size M0 above what you expect to find.</p>
+    </div>
+
     <div class="row small">
       <label for="m0">Subspace M0</label><input id="m0" type="number" value="40" min="1">
       <label for="cp">Contour points</label><input id="cp" type="number" value="8" min="2" max="32">
@@ -543,9 +577,11 @@ CALCULATOR = """
   <section class="panel limits">
     <h2>Free-tier limits</h2>
     <ul id="limits"><li>loading&hellip;</li></ul>
-    <p>The limits are on problem size and time, not on features: the calculator
-       does exactly what the desktop application does, on smaller problems. The
-       app itself has no such caps.</p>
+    <p>These are limits on size and time, not on accuracy: within them the
+       calculator does exactly what the desktop application does, calling the
+       same library through the same code path. The application has no caps,
+       no timeout, and adds the polynomial and nonlinear problems, the
+       eigenvector and filter views, and file loading.</p>
   </section>
 </div>
 """

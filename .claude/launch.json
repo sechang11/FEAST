@@ -4,9 +4,8 @@
     {
       "name": "feast-web",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "uvicorn", "server:app", "--port", "8010"],
-      "cwd": "web",
-      "port": 8010
+      "runtimeArgs": ["web/serve.py"],
+      "port": 8000
     }
   ]
 }

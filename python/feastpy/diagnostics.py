@@ -15,6 +15,17 @@ from typing import Any, Optional
 from .solver import explain_info
 
 
+def _fmt_c(z) -> str:
+    """A complex number the way a person writes one: 1.5, 2i, 1.5+2i."""
+    z = complex(z)
+    re, im = z.real, z.imag
+    if im == 0:
+        return f"{re:g}"
+    if re == 0:
+        return f"{im:g}i"
+    return f"{re:g}{'+' if im > 0 else '-'}{abs(im):g}i"
+
+
 @dataclass
 class Suggestion:
     """One thing to try. `param`/`value` is applied by the caller if present."""
@@ -42,11 +53,31 @@ class Diagnosis:
 
 
 def diagnose(result, *, n: int, m0: int, contour_points: int, tol_exponent: int,
-             max_loops: int, emin: float, emax: float,
+             max_loops: int, emin: Optional[float] = None,
+             emax: Optional[float] = None,
+             center: Optional[complex] = None,
+             radius: Optional[float] = None,
              bounds: Optional[tuple] = None) -> Diagnosis:
-    """Explain a FeastResult and propose fixes."""
+    """Explain a FeastResult and propose fixes.
+
+    The search region is either an interval (`emin`/`emax`, Hermitian) or a
+    disc (`center`/`radius`, non-Hermitian and complex-symmetric). The advice
+    has to follow it: telling someone to "widen the interval" when they are
+    searching a disc names a control that is not on their screen, and the
+    fix they actually need -- a larger radius, or a centre nearer the
+    eigenvalues -- never gets mentioned.
+    """
     info = result.info
     s: list = []
+    disc = center is not None and radius is not None
+
+    if disc:
+        region = f"the disc of radius {radius:g} about {_fmt_c(center)}"
+        wider = Suggestion(
+            f"Search a wider disc (radius {radius * 2:g}).", "radius", radius * 2)
+    else:
+        region = "[%g, %g]" % (emin, emax) if emin is not None else "this region"
+        wider = None
 
     if info == 0:
         detail = f"Found {result.n_found} eigenvalue(s) in {result.loops} loop(s)."
@@ -63,9 +94,17 @@ def diagnose(result, *, n: int, m0: int, contour_points: int, tol_exponent: int,
         return Diagnosis(info, "Success", detail, s)
 
     if info == 1:
-        headline = "No eigenvalues in this interval"
-        detail = ("FEAST searched [%g, %g] and found nothing. The interval is "
-                  "probably in a gap, or outside the spectrum." % (emin, emax))
+        headline = "No eigenvalues in this disc" if disc \
+            else "No eigenvalues in this interval"
+        if disc:
+            detail = (f"FEAST searched {region} and found nothing. Nothing in "
+                      "the spectrum lies inside that circle -- for a "
+                      "non-Hermitian matrix the eigenvalues can sit well off "
+                      "the real axis, so a disc centred on it may miss them "
+                      "entirely.")
+        else:
+            detail = ("FEAST searched %s and found nothing. The interval is "
+                      "probably in a gap, or outside the spectrum." % region)
         # A subspace far too small to hold the interval's eigenvalues can make
         # FEAST report "none here" rather than "too small" -- observed on
         # Apple Silicon (Accelerate) where other platforms return info=3 for
@@ -77,11 +116,25 @@ def diagnose(result, *, n: int, m0: int, contour_points: int, tol_exponent: int,
                 "that small can miss eigenvalues entirely. Try "
                 f"{min(n, max(10, n // 4))}.",
                 "m0", min(n, max(10, n // 4))))
-        if bounds is not None:
+        if disc:
+            s.append(wider)
+            if bounds is not None:
+                # For a disc, `bounds` is the Gershgorin (centre, radius) that
+                # provably contains everything -- so this is not "try bigger",
+                # it is "here is a circle the spectrum cannot escape".
+                s.append(Suggestion(
+                    f"Search the disc that bounds the whole spectrum: radius "
+                    f"{bounds[1]:.6g} about {_fmt_c(bounds[0])}. Every "
+                    "eigenvalue is inside it.",
+                    "disc", (complex(bounds[0]).real, complex(bounds[0]).imag,
+                             float(bounds[1]))))
+        elif bounds is not None:
             s.append(Suggestion(
                 f"Search the whole spectrum [{bounds[0]:.6g}, {bounds[1]:.6g}] "
                 "to see where the eigenvalues actually are.",
                 "interval", (float(bounds[0]), float(bounds[1]))))
+        if disc:
+            return Diagnosis(info, headline, detail, s)
         s.append(Suggestion(
             'Use "How many are in here?" before solving - it estimates the count '
             "in a fraction of the time."))
@@ -105,13 +158,22 @@ def diagnose(result, *, n: int, m0: int, contour_points: int, tol_exponent: int,
     if info == 3:
         headline = "Subspace too small"
         suggested = min(n, max(m0 * 2, 10))
-        detail = (f"M0={m0} cannot hold every eigenvalue in the interval, so the "
-                  "result is incomplete.")
+        detail = (f"M0={m0} cannot hold every eigenvalue in "
+                  + ("the disc" if disc else "the interval")
+                  + ", so the result is incomplete.")
         s.append(Suggestion(f"Raise M0 to {suggested} and solve again.",
                             "m0", suggested))
-        s.append(Suggestion(
-            'Or estimate the count first with "How many are in here?" and let it '
-            "size M0 for you."))
+        if disc:
+            # No stochastic estimator for a disc, so the interval advice would
+            # point at a button that is not there. A smaller disc holds fewer
+            # eigenvalues, which is the other way out of this.
+            s.append(Suggestion(
+                f"Or search a smaller disc (radius {radius / 2:g}), which has "
+                "fewer eigenvalues in it to hold.", "radius", radius / 2))
+        else:
+            s.append(Suggestion(
+                'Or estimate the count first with "How many are in here?" and let it '
+                "size M0 for you."))
         return Diagnosis(info, headline, detail, s)
 
     if info in (4, 5, 6):
@@ -124,6 +186,11 @@ def diagnose(result, *, n: int, m0: int, contour_points: int, tol_exponent: int,
         return Diagnosis(info, headline, detail, s)
 
     if info == 200:
+        if disc:
+            return Diagnosis(info, "Invalid search disc",
+                             f"The radius must be positive, got {radius:g}.",
+                             [Suggestion("Use a positive radius.", "radius",
+                                         abs(radius) or 1.0)])
         return Diagnosis(info, "Invalid interval",
                          f"E min ({emin:g}) must be less than E max ({emax:g}).",
                          [Suggestion("Swap the two values.", "interval",
@@ -155,10 +222,14 @@ def diagnose(result, *, n: int, m0: int, contour_points: int, tol_exponent: int,
                                      "m0", max(1, m0 // 2))])
 
     if info in (-2, -3):
+        hint = ("the matrix is not what FEAST expects: for a disc search it "
+                "must be stored in full (both triangles), and B must be "
+                "non-singular"
+                if disc else
+                "the matrix is not what FEAST expects: check that it is "
+                "symmetric/Hermitian, and that B is positive definite")
         return Diagnosis(info, "Internal solver error",
-                         explain_info(info) + ". This usually indicates the "
-                         "matrix is not what FEAST expects: check that it is "
-                         "symmetric/Hermitian, and that B is positive definite.",
+                         explain_info(info) + f". This usually indicates {hint}.",
                          [])
 
     return Diagnosis(info, f"FEAST returned info={info}", explain_info(info), [])

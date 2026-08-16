@@ -145,8 +145,11 @@ environment.
 - **There is no native MKL for Apple Silicon** — Intel ships none for ARM.
   Native ARM covers 34/36 of upstream's examples; the remaining two (direct
   polynomial) run through the Intel kit under Rosetta.
-- **The web calculator is interval-only** and capped at 30 seconds. That is a
-  page nobody has built, not a limit of the backend.
+- **The web calculator is capped at 30 seconds** and at n=500 dense / 5,000
+  sparse. It searches both an interval and a disc, so Hermitian and
+  non-Hermitian problems both work; the nonlinear families need the RCI
+  interface, which a stateless web form cannot express, and live in the
+  desktop app and the bindings instead.
 - **Licensing is switched off.** The application runs unrestricted until a
   signing key is configured.
 
