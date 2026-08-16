@@ -53,6 +53,11 @@ def solve_blocking(A, B, params: dict):
     from . import solver
 
     t0 = time.perf_counter()
+    # A self-consistent problem is not a different routine, it is a loop
+    # around one: the matrix depends on its own eigenvectors.
+    if params.get("scf"):
+        r = _solve_self_consistent(A, B, dict(params))
+        return r, time.perf_counter() - t0
     # A list of matrices means a polynomial problem: A0 + lambda A1 + ...
     if isinstance(A, (list, tuple)):
         r = solver.eig_polynomial(A, **params)
@@ -65,7 +70,102 @@ def solve_blocking(A, B, params: dict):
     return r, time.perf_counter() - t0
 
 
+SCF_MARKER = "FEASTPY-SCF"
+
+
+def _solve_self_consistent(A, B, params: dict):
+    """The nonlinear *eigenvector* problem: H(X) X = X Lambda.
+
+    Here the matrix depends on the eigenvectors it produces -- the
+    self-consistent field problem, as in Kohn-Sham DFT or Hartree-Fock. FEAST
+    has no single routine for it and does not need one: the shape of the
+    answer is a loop, where each pass builds H from the current density and
+    solves it, until the density stops moving.
+
+    The density is rho_i = sum_j |X_ij|^2 over the occupied states returned,
+    and the coupling is a diagonal potential
+
+        V(rho) = alpha * rho ** exponent
+
+    which covers the textbook cases: exponent 1 is Hartree-like, 1/3 is the
+    shape of LDA exchange. Successive densities are mixed rather than replaced,
+    because taking the new density outright oscillates instead of converging.
+
+    Each pass starts from the previous pass's subspace via fpm(5)=1, which is
+    what makes this cheap: the eigenvectors barely move between iterations.
+    """
+    import numpy as np
+    import scipy.sparse as sp
+
+    from . import solver
+
+    scf = params.pop("scf")
+    alpha = float(scf.get("alpha", 1.0))
+    exponent = float(scf.get("exponent", 1.0))
+    mixing = float(scf.get("mixing", 0.3))
+    tol = float(scf.get("tol", 1e-8))
+    max_outer = int(scf.get("max_outer", 50))
+    verbose = params.get("verbose", False)
+
+    if not (0.0 < mixing <= 1.0):
+        raise ValueError(f"mixing must be in (0, 1], got {mixing}")
+
+    sparse = sp.issparse(A)
+    n = A.shape[0]
+    rho = np.zeros(n)
+    prev = None
+    last = None
+
+    # The inner solve must not print its own table on top of ours.
+    inner = dict(params, verbose=False)
+    inner.pop("rule", None) if not sparse else None
+
+    for it in range(1, max_outer + 1):
+        pot = alpha * np.power(rho, exponent) if exponent != 1.0 else alpha * rho
+        H = (A + sp.diags(pot, format="csr")) if sparse else (A + np.diag(pot))
+        fn = solver.eigsh_interval if sparse else solver.eigh_interval
+        r = fn(H, B=B, initial_subspace=prev, **inner)
+        last = r
+        if r.info != 0 or r.n_found == 0:
+            # Report the failure from the pass that produced it rather than
+            # looping on a broken state.
+            break
+        X = r.eigenvectors
+        new_rho = np.sum(np.abs(X) ** 2, axis=1)
+        delta = float(np.max(np.abs(new_rho - rho)))
+        prev = X
+        rho = (1.0 - mixing) * rho + mixing * new_rho
+        if verbose:
+            print(f"{SCF_MARKER} iter={it} delta={delta:.6e} "
+                  f"found={r.n_found} lam0={r.eigenvalues[0]:.10g}", flush=True)
+        if delta < tol:
+            break
+
+    if last is not None:
+        last.scf_iterations = it
+        last.scf_delta = delta if last.info == 0 and last.n_found else float("nan")
+        last.scf_density = rho
+        last.scf_converged = bool(last.info == 0 and last.n_found and delta < tol)
+    return last
+
+
 def parse_progress(line: str) -> Optional[dict]:
+    """Also recognises the self-consistent loop's own progress lines."""
+    if line.lstrip().startswith(SCF_MARKER):
+        out: dict = {"scf": True}
+        for tok in line.split()[1:]:
+            if "=" not in tok:
+                continue
+            k, v = tok.split("=", 1)
+            try:
+                out[k] = int(v) if k in ("iter", "found") else float(v)
+            except ValueError:
+                pass
+        return out
+    return _parse_feast_table(line)
+
+
+def _parse_feast_table(line: str) -> Optional[dict]:
     """Parse one row of FEAST's runtime convergence table.
 
     With fpm(1)=1 FEAST prints, per refinement loop:

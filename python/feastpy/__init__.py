@@ -13,6 +13,7 @@ from .solver import (
     explain_info,
     spectral_bounds,
     spectral_disc,
+    polynomial_disc,
 )
 
 __all__ = [
@@ -24,6 +25,7 @@ __all__ = [
     "estimate_count",
     "spectral_bounds",
     "spectral_disc",
+    "polynomial_disc",
     "FeastResult",
     "FeastError",
     "FeastLibraryNotFound",

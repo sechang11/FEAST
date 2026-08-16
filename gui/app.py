@@ -558,6 +558,44 @@ class MainWindow(QMainWindow):
         self.disc_box.setVisible(False)
         lv.addWidget(self.disc_box)
 
+        # Nonlinear eigenvector (self-consistent) problems. The matrix depends
+        # on the eigenvectors it produces, so this is not a different routine
+        # but a loop around one -- which is why it lives beside the search
+        # region rather than replacing it.
+        self.scf_box = QGroupBox("Self-consistent (nonlinear eigenvector)")
+        self.scf_box.setCheckable(True)
+        self.scf_box.setChecked(False)
+        self.scf_box.setToolTip(
+            "Solve H(rho) x = lambda x where rho is the density built from the\n"
+            "eigenvectors: H is rebuilt and re-solved until rho stops moving.")
+        sf = QFormLayout(self.scf_box)
+        self.scf_alpha = QDoubleSpinBox()
+        self.scf_alpha.setDecimals(6); self.scf_alpha.setRange(-1e9, 1e9)
+        self.scf_alpha.setValue(1.0)
+        self.scf_exponent = QDoubleSpinBox()
+        self.scf_exponent.setDecimals(4); self.scf_exponent.setRange(0.01, 10.0)
+        self.scf_exponent.setValue(1.0)
+        self.scf_exponent.setToolTip(
+            "V(rho) = alpha * rho^exponent.\n"
+            "1 is Hartree-like; 1/3 has the shape of LDA exchange.")
+        self.scf_mixing = QDoubleSpinBox()
+        self.scf_mixing.setDecimals(3); self.scf_mixing.setRange(0.001, 1.0)
+        self.scf_mixing.setValue(0.3)
+        self.scf_mixing.setToolTip(
+            "How much of the new density to take each pass.\n"
+            "Taking all of it (1.0) usually oscillates instead of converging.")
+        self.scf_tol = QSpinBox()
+        self.scf_tol.setRange(2, 14); self.scf_tol.setValue(9)
+        self.scf_tol.setPrefix("1e-")
+        self.scf_outer = QSpinBox()
+        self.scf_outer.setRange(1, 2000); self.scf_outer.setValue(100)
+        sf.addRow("Coupling alpha", self.scf_alpha)
+        sf.addRow("Exponent", self.scf_exponent)
+        sf.addRow("Mixing", self.scf_mixing)
+        sf.addRow("Density tolerance", self.scf_tol)
+        sf.addRow("Max outer passes", self.scf_outer)
+        lv.addWidget(self.scf_box)
+
         self.m0 = QSpinBox()
         self.m0.setRange(1, 100000)
         self.m0.setValue(40)
@@ -757,6 +795,11 @@ class MainWindow(QMainWindow):
         m = self.menuBar().addMenu("&File")
         a = QAction("&Open matrix...", self); a.setShortcut("Ctrl+O")
         a.triggered.connect(self.open_file); m.addAction(a)
+        a = QAction("Open &polynomial problem...", self)
+        a.setShortcut("Ctrl+Shift+O")
+        a.setStatusTip("A0 + λA1 + λ²A2 + ... = 0, one file per "
+                       "coefficient, lowest power first")
+        a.triggered.connect(self.open_polynomial); m.addAction(a)
         a = QAction("&Export results...", self); a.setShortcut("Ctrl+S")
         a.triggered.connect(self.export_csv); m.addAction(a)
         m.addSeparator()
@@ -1354,6 +1397,106 @@ class MainWindow(QMainWindow):
         self.use_full_range()
 
     @Slot()
+    def open_polynomial(self):
+        """Load a user's own polynomial problem: A0 + λA1 + ... + λ^p Ap = 0.
+
+        FEAST's nonlinear support *is* the polynomial support -- the ?pev
+        routines -- and they take any degree. The app could already solve one,
+        but only the built-in system5, because nothing here let a user name
+        their own coefficient matrices. That made a whole problem class look
+        like a demo.
+
+        Files are chosen in one dialog and sorted by name, because the order is
+        the powers of lambda and getting it backwards silently solves a
+        different problem.
+        """
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Open polynomial coefficients (A0, A1, A2, ... in order)",
+            "", matrixio.SUPPORTED)
+        if not paths:
+            return
+        if len(paths) < 2:
+            QMessageBox.warning(
+                self, APP_NAME,
+                "A polynomial problem needs at least two coefficient "
+                "matrices: A0 + λA1.\n\nSelect them all in one go — the file "
+                "names are sorted, so A0/A1/A2 or ...0/...1/...2 order them "
+                "correctly.")
+            return
+
+        paths = sorted(paths)
+        mats = []
+        for p in paths:
+            try:
+                M = matrixio.load_matrix(p)
+            except Exception as exc:
+                QMessageBox.warning(self, APP_NAME,
+                                    f"Could not read {Path(p).name}: {exc}")
+                return
+            if M.shape[0] != M.shape[1]:
+                QMessageBox.warning(
+                    self, APP_NAME,
+                    f"{Path(p).name} is {M.shape[0]}x{M.shape[1]}; "
+                    "coefficient matrices must be square.")
+                return
+            if mats and M.shape != mats[0].shape:
+                QMessageBox.warning(
+                    self, APP_NAME,
+                    f"{Path(p).name} is {M.shape[0]}x{M.shape[0]} but "
+                    f"{Path(paths[0]).name} is {mats[0].shape[0]}x"
+                    f"{mats[0].shape[0]}. All coefficients must match.")
+                return
+            mats.append(sp.csr_matrix(M) if not sp.issparse(M) else M.tocsr())
+
+        order = "  ".join(f"A{i}={Path(p).name}" for i, p in enumerate(paths))
+        ans = QMessageBox.question(
+            self, APP_NAME,
+            "Coefficients will be read in this order:\n\n" + order.replace("  ", "\n")
+            + f"\n\nso the problem is  {' + '.join(['A0'] + [f'λ^{i} A{i}' if i > 1 else 'λ A1' for i in range(1, len(paths))])} = 0."
+              "\n\nIs that the right order?")
+        if ans != QMessageBox.Yes:
+            return
+
+        if self._license_blocks(mats[0]):
+            return
+
+        self.poly_matrices = mats
+        self.matrix = mats[0]              # the Matrix tab shows A0
+        self.matrix_path = paths[0]
+        self.b_matrix = None
+        self.b_path = None
+        self._clear_demo_selection()
+        self.clear_b_btn.setEnabled(False)
+        self.b_label.setText("polynomial problem - B is not used")
+        self._uplo = "F"
+
+        # A polynomial spectrum is complex, so this is always a disc search.
+        # The bound has to be one for the *polynomial*: A0's Gershgorin disc
+        # bounds A0's own eigenvalues, which say nothing about the roots.
+        try:
+            centre, radius = feastpy.polynomial_disc(mats)
+            bounded = True
+        except Exception as exc:
+            self._log(f"  no root bound available ({exc}); opening on a unit disc")
+            centre, radius, bounded = complex(0.0, 0.0), 1.0, False
+        self._set_geometry(problems.DISC, centre, radius)
+
+        self.matrix_label.setText(
+            f"polynomial degree {len(mats) - 1}, {mats[0].shape[0]}x"
+            f"{mats[0].shape[0]}, {len(mats)} coefficients")
+        self.m0.setValue(min(self.m0.value(), mats[0].shape[0]))
+        self._update_spectrum_view()
+        self._refresh_matrix_view(f"{Path(paths[0]).name} (A0)")
+        self._log(f"loaded polynomial degree {len(mats) - 1}: "
+                  + ", ".join(Path(p).name for p in paths))
+        if bounded:
+            self._log(f"  every root lies inside radius {radius:.4g} about the "
+                      "origin (Fujiwara bound). The bound is loose, and a disc "
+                      "this wide encloses the whole spectrum -- narrow it to "
+                      "the region you want, or raise M0 above the number of "
+                      "roots inside.")
+
+    @Slot()
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open matrix", "",
                                               matrixio.SUPPORTED)
@@ -1485,13 +1628,39 @@ class MainWindow(QMainWindow):
             params["emax"] = self.emax.value()
             # fpm(16) is only wired through the interval routines so far.
             params["rule"] = self.rule.currentData()
+        # A self-consistent run is a loop around whichever search region is
+        # selected, so it composes with the interval controls rather than
+        # replacing them. It is Hermitian-only: the density is built from
+        # eigenvectors of a matrix whose eigenvalues must be real.
+        if self.scf_box.isChecked():
+            if self._geometry == problems.DISC or self.poly_matrices is not None:
+                QMessageBox.warning(
+                    self, APP_NAME,
+                    "A self-consistent solve needs an interval search on a "
+                    "Hermitian matrix.\n\nThe density is built from the "
+                    "eigenvectors, so the problem has to have real eigenvalues.")
+                return
+            params["scf"] = {
+                "alpha": self.scf_alpha.value(),
+                "exponent": self.scf_exponent.value(),
+                "mixing": self.scf_mixing.value(),
+                "tol": 10.0 ** (-self.scf_tol.value()),
+                "max_outer": self.scf_outer.value(),
+            }
+
         if not self.solving:          # a fresh solve, not an auto-retry
             self.convergence = []
             self.conv_plot.clear()
         where = (f"disc centre {self._centre.real:g}{self._centre.imag:+g}i "
                  f"radius {self._radius:g}" if self._geometry == problems.DISC
                  else f"[{params['emin']:g}, {params['emax']:g}]")
-        self._log(f"solving on {where} with M0={params['m0']}...")
+        if "scf" in params:
+            sc = params["scf"]
+            self._log(f"self-consistent solve on {where} with M0={params['m0']}: "
+                      f"V(rho)={sc['alpha']:g}*rho^{sc['exponent']:g}, "
+                      f"mixing {sc['mixing']:g}, up to {sc['max_outer']} passes...")
+        else:
+            self._log(f"solving on {where} with M0={params['m0']}...")
         self._set_solving(True)
         self.statusBar().showMessage("solving...")
 
@@ -1521,6 +1690,21 @@ class MainWindow(QMainWindow):
     def on_progress(self, rec: dict):
         """One row of FEAST's convergence table arrived. Plotting these turns
         'it is still going' into 'it is converging, and how fast'."""
+        # The self-consistent loop reports its own outer passes, which carry
+        # `iter`/`delta` rather than the table's `loop`/`residual`. They are a
+        # different quantity -- how far the density moved, not how well the
+        # last linear solve converged -- so they go to the log and the status
+        # bar rather than onto the same axes.
+        if rec.get("scf"):
+            self.statusBar().showMessage(
+                f"self-consistent pass {rec.get('iter')}: "
+                f"density moved {rec.get('delta', float('nan')):.2e}")
+            if rec.get("iter", 0) == 1 or rec.get("iter", 0) % 5 == 0:
+                self._log(f"  pass {rec.get('iter')}: "
+                          f"max|drho|={rec.get('delta', float('nan')):.3e}, "
+                          f"{rec.get('found')} eigenvalue(s), "
+                          f"lambda0={rec.get('lam0', float('nan')):.10g}")
+            return
         self.convergence.append(rec)
         loops = [r["loop"] for r in self.convergence]
 

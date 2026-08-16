@@ -72,6 +72,8 @@ def check_disc():
         check("complex spectrum view renders them", False, str(exc)[:60])
 
     check_user_opens_non_hermitian()
+    check_user_polynomial()
+    check_self_consistent()
 
 
 def check_user_opens_non_hermitian():
@@ -538,6 +540,122 @@ def main():
     t.timeout.connect(poll)
     t.start(500)
     return app.exec()
+
+
+
+
+def check_user_polynomial():
+    """A user's own polynomial problem, not just the built-in system5.
+
+    FEAST's nonlinear support is its polynomial support, and the ?pev routines
+    take any degree. Nothing in the app let a user name their own coefficient
+    matrices, so a whole problem class was reachable only as a demo.
+    """
+    print("\nopening a user's own polynomial problem:")
+    import os
+    import tempfile
+    from unittest.mock import patch
+
+    import numpy as np
+    import scipy.linalg as sla
+    from feastpy import problems, runner
+
+    import app as guimod
+
+    n = 40
+    rng = np.random.default_rng(0)
+
+    def sym(scale):
+        M = rng.normal(size=(n, n)) * scale
+        return (M + M.T) / 2
+
+    mats = [sym(1.0) + np.eye(n) * 6, sym(0.3), sym(0.1), np.eye(n) * 0.2]
+    d = tempfile.mkdtemp()
+    paths = []
+    for i, M in enumerate(mats):
+        path = os.path.join(d, f"cubic_A{i}.mtx")
+        paths.append(path)
+        ent = [(r + 1, c + 1, M[r, c]) for r in range(n) for c in range(n)
+               if M[r, c] != 0]
+        with open(path, "w") as fh:
+            fh.write("\n".join([f"{n} {n} {len(ent)}"]
+                                + [f"{r} {c} {v!r}" for r, c, v in ent]))
+
+    w = guimod.MainWindow()
+    with patch("app.QFileDialog.getOpenFileNames", return_value=(paths, "")),          patch("app.QMessageBox.question", return_value=guimod.QMessageBox.Yes),          patch("app.QMessageBox.warning") as warn:
+        w.open_polynomial()
+        check("a degree-3 problem is accepted", not warn.called,
+              warn.call_args[0][2][:50] if warn.called else "")
+    check("all four coefficients are held",
+          w.poly_matrices is not None and len(w.poly_matrices) == 4)
+    check("it opens in disc mode", w._geometry == problems.DISC)
+    check("the root bound is the polynomial's, not A0's",
+          w._radius > 0 and w._centre == 0)
+
+    # Narrow to where the roots are and solve, as a user would.
+    Z, I = np.zeros((n, n)), np.eye(n)
+    C0 = np.block([[Z, I, Z], [Z, Z, I], [-mats[0], -mats[1], -mats[2]]])
+    C1 = np.block([[I, Z, Z], [Z, I, Z], [Z, Z, mats[3]]])
+    true = sla.eig(C0, C1, right=False)
+    true = true[np.isfinite(true)]
+    inside = int((np.abs(true) <= 2.0).sum())
+    r, _ = runner.solve_blocking(
+        w.poly_matrices, None,
+        dict(center=complex(0, 0), radius=2.0, m0=inside + 30,
+             contour_points=16, tol_exponent=12, max_loops=20))
+    check("it solves", r.info == 0, f"info={r.info}")
+    check("finding every root in the disc", r.n_found == inside,
+          f"{r.n_found} vs {inside}")
+    got = np.asarray(r.eigenvalues)
+    check("to full accuracy",
+          max(min(abs(true - g)) for g in got) < 1e-10,
+          f"max err {max(min(abs(true - g)) for g in got):.1e}")
+
+
+def check_self_consistent():
+    """The nonlinear eigenvector problem: H(rho) x = lambda x.
+
+    A discretised 1-D Schrodinger operator with a density-dependent potential
+    -- the shape of a Kohn-Sham problem. The check that matters is not that it
+    ran but that the answer is self-consistent: the density built from the
+    returned eigenvectors is the density that produced them.
+    """
+    print("\nself-consistent (nonlinear eigenvector) solve:")
+    import numpy as np
+    import scipy.sparse as sp
+    from feastpy import runner
+
+    n = 300
+    h = 10.0 / (n - 1)
+    lap = sp.diags([-1, 2, -1], [-1, 0, 1], shape=(n, n), format="csr") / (h * h)
+    x = np.linspace(-5, 5, n)
+    H0 = (0.5 * lap + sp.diags(0.5 * x ** 2, format="csr")).tocsr()
+    alpha = 2.0
+
+    r, _ = runner.solve_blocking(
+        H0, None,
+        dict(emin=0.0, emax=6.0, m0=20, uplo="F",
+             scf=dict(alpha=alpha, exponent=1.0, mixing=0.3,
+                      tol=1e-9, max_outer=200)))
+    check("the loop converges", bool(r.scf_converged),
+          f"passes={r.scf_iterations} delta={r.scf_delta:.1e}")
+    check("the last pass is a clean FEAST solve", r.info == 0 and r.n_found > 0,
+          f"info={r.info} found={r.n_found}")
+
+    H = (H0 + sp.diags(alpha * r.scf_density, format="csr")).tocsr()
+    X = r.eigenvectors
+    resid = float(np.max(np.linalg.norm(H @ X - X * r.eigenvalues, axis=0)))
+    check("and the pair really solves H(rho)x = lambda x", resid < 1e-8,
+          f"{resid:.1e}")
+    rebuilt = np.sum(np.abs(X) ** 2, axis=1)
+    check("the density reproduces itself",
+          float(np.max(np.abs(rebuilt - r.scf_density))) < 1e-8,
+          f"{float(np.max(np.abs(rebuilt - r.scf_density))):.1e}")
+    # Without the potential these are 0.5, 1.5, 2.5, ...; the coupling must
+    # move them, or the "self-consistent" part did nothing.
+    check("the potential actually shifted the levels",
+          abs(r.eigenvalues[0] - 0.5) > 1e-3,
+          f"lambda0={r.eigenvalues[0]:.6f} vs 0.5 uncoupled")
 
 
 if __name__ == "__main__":

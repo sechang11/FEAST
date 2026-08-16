@@ -78,6 +78,14 @@ class FeastResult:
     all_eigenvalues: Optional[np.ndarray] = None
     all_residuals: Optional[np.ndarray] = None
     fpm: Optional[np.ndarray] = None
+    # Set by the self-consistent driver. A nonlinear eigenvector solve has an
+    # outer convergence story of its own -- how many times the matrix was
+    # rebuilt, and whether the density stopped moving -- which the inner
+    # FEAST status cannot express: info=0 only means the last pass converged.
+    scf_iterations: Optional[int] = None
+    scf_delta: Optional[float] = None
+    scf_density: Optional[np.ndarray] = None
+    scf_converged: Optional[bool] = None
 
     @property
     def converged(self) -> bool:
@@ -91,7 +99,8 @@ class FeastResult:
 def _make_fpm(contour_points: Optional[int], tol_exponent: Optional[int],
               max_loops: Optional[int], verbose: bool,
               count_only: bool = False, rule: Optional[int] = None,
-              ratio: Optional[int] = None) -> np.ndarray:
+              ratio: Optional[int] = None,
+              initial_subspace: bool = False) -> np.ndarray:
     """fpm is FEAST's 64-entry parameter array.
 
     Note the index shift: the documentation uses Fortran's fpm(1..64), so
@@ -123,9 +132,96 @@ def _make_fpm(contour_points: Optional[int], tol_exponent: Optional[int],
         fpm[15] = rule               # fpm(16) 0 Gauss, 1 Trapezoidal, 2 Zolotarev
     if ratio is not None:
         fpm[17] = ratio              # fpm(18) ellipse ratio x100
+    if initial_subspace:
+        # fpm(5)=1: start from the subspace already in q rather than a random
+        # one. This is what makes a self-consistent loop converge in a few
+        # FEAST calls instead of restarting from scratch each time -- the
+        # eigenvectors barely move between outer iterations, so the previous
+        # answer is an excellent guess for the next.
+        fpm[4] = 1
     if count_only:
         fpm[13] = 2                  # fpm(14) stochastic eigenvalue-count estimate
     return fpm
+
+
+def polynomial_disc(matrices) -> tuple[complex, float]:
+    """A disc about the origin containing every root of a matrix polynomial.
+
+    For P(lambda) = A0 + lambda A1 + ... + lambda^p Ap, Fujiwara's bound
+
+        |lambda| <= 2 max_k ( ||Ak|| / ||Ap|| ) ^ (1/(p-k))
+
+    holds for the matrix case with any submultiplicative norm; the infinity
+    norm is used here because it is one pass over the nonzeros.
+
+    Worth having rather than reusing `spectral_disc` on A0: A0's Gershgorin
+    disc bounds the eigenvalues of A0, which have no particular relationship
+    to the roots of the polynomial. On a random cubic the two happened to land
+    within 2% of each other, which is luck, not a guarantee.
+
+    The bound is loose -- on that cubic it gives 41 for roots inside 6.8 -- so
+    it is where to start looking, not where to solve. A disc this size holds
+    every root, and M0 must exceed the number enclosed.
+    """
+    import numpy as np
+    import scipy.sparse as sp
+
+    if len(matrices) < 2:
+        raise ValueError("a polynomial problem needs at least A0 and A1")
+
+    def inf_norm(M):
+        M = sp.csr_matrix(M) if not sp.issparse(M) else M
+        return float(abs(M).sum(axis=1).max()) if M.nnz else 0.0
+
+    norms = [inf_norm(M) for M in matrices]
+    p = len(matrices) - 1
+    lead = norms[p]
+    if lead <= 0.0:
+        # A singular leading coefficient means roots at infinity; there is no
+        # finite bound to offer, so say so rather than return a made-up one.
+        raise ValueError(
+            "the leading coefficient A%d is zero, so the polynomial is "
+            "degenerate: drop it, or the problem has infinite eigenvalues" % p)
+
+    r = 2.0 * max((norms[k] / lead) ** (1.0 / (p - k)) for k in range(p))
+    return complex(0.0, 0.0), float(max(r, 1e-12))
+
+
+def _seed_subspace(initial, n: int, m0: int, dtype) -> np.ndarray:
+    """The M0-column work array FEAST iterates on, optionally pre-filled.
+
+    With fpm(5)=1 FEAST treats whatever is already in this array as the
+    starting subspace. That is the whole mechanism behind a self-consistent
+    (nonlinear eigenvector) loop: A depends on its own eigenvectors, so it is
+    solved by repeated FEAST calls, and each one starts from the last one's
+    answer instead of from a random subspace.
+
+    A guess with fewer columns than M0 is accepted -- the number of
+    eigenvalues found changes between outer iterations, so requiring an exact
+    match would push bookkeeping onto the caller. The spare columns are filled
+    with random vectors, NOT left at zero: FEAST does not fill them itself,
+    and a subspace padded with zero columns is rank deficient, which makes the
+    reduced eigenvalue problem singular. That surfaces as info=-3, an
+    "internal error in the reduced eigenvalue solver", on the *second* outer
+    iteration -- the first has no guess to pass, so the loop appears to work
+    and then dies once warm-starting begins.
+    """
+    q = np.zeros((n, m0), dtype=dtype, order="F")
+    if initial is None:
+        return q
+    guess = np.asarray(initial)
+    if guess.ndim != 2 or guess.shape[0] != n:
+        raise ValueError(
+            f"initial_subspace must be ({n}, k) with k <= {m0}, got {guess.shape}")
+    k = min(guess.shape[1], m0)
+    q[:, :k] = guess[:, :k].astype(dtype, copy=False)
+    if k < m0:
+        rng = np.random.default_rng(0)           # reproducible run to run
+        pad = rng.standard_normal((n, m0 - k))
+        if np.issubdtype(dtype, np.complexfloating):
+            pad = pad + 1j * rng.standard_normal((n, m0 - k))
+        q[:, k:] = pad.astype(dtype, copy=False)
+    return q
 
 
 def eigh_interval(
@@ -143,6 +239,7 @@ def eigh_interval(
     ratio: Optional[int] = None,
     verbose: bool = False,
     count_only: bool = False,
+    initial_subspace: Optional[np.ndarray] = None,
 ) -> FeastResult:
     """All eigenvalues of a dense Hermitian problem inside [emin, emax].
 
@@ -175,10 +272,11 @@ def eigh_interval(
     m0 = int(min(m0, n))
 
     fpm = _make_fpm(contour_points, tol_exponent, max_loops, verbose,
-                    count_only, rule, ratio)
+                    count_only, rule, ratio,
+                    initial_subspace=initial_subspace is not None)
 
     lam = np.zeros(m0, dtype=np.float64)             # eigenvalues are always real
-    q = np.zeros((n, m0), dtype=dtype, order="F")
+    q = _seed_subspace(initial_subspace, n, m0, dtype)
     res = np.zeros(m0, dtype=np.float64)
 
     epsout = _d(0.0)
@@ -553,6 +651,7 @@ def eigsh_interval(
     ratio: Optional[int] = None,
     verbose: bool = False,
     count_only: bool = False,
+    initial_subspace: Optional[np.ndarray] = None,
 ) -> FeastResult:
     """Sparse (CSR) Hermitian version of :func:`eigh_interval`.
 
@@ -618,12 +717,13 @@ def eigsh_interval(
     m0 = int(min(m0, n))
 
     fpm = _make_fpm(contour_points, tol_exponent, max_loops, verbose,
-                    count_only, rule, ratio)
+                    count_only, rule, ratio,
+                    initial_subspace=initial_subspace is not None)
 
     # Eigenvalues and residuals stay real -- a Hermitian matrix has real
     # eigenvalues -- but the eigenvectors follow the matrix.
     lam = np.zeros(m0, dtype=np.float64)
-    q = np.zeros((n, m0), dtype=dtype, order="F")
+    q = _seed_subspace(initial_subspace, n, m0, dtype)
     res = np.zeros(m0, dtype=np.float64)
 
     epsout, loop, mode, info = _d(0.0), _i(0), _i(0), _i(0)
