@@ -2110,9 +2110,74 @@ def selftest() -> int:
     QTimer.singleShot(120_000, app.quit)
     app.exec()
 
+    # The two nonlinear problem types, checked in the bundle rather than only
+    # in CI. Both are self-contained -- no sample files, no display -- because
+    # the point is to prove what this binary can do on the machine it landed
+    # on. Each is measured against an answer known in advance: a self-test
+    # that only asserts "it ran" would have passed on every build that could
+    # not open these problems at all.
+    _poly_ok = _scf_ok = False
+    try:
+        import scipy.sparse as _sp
+
+        # Diagonal quadratic: the problem decouples into n scalar quadratics
+        # lambda^2 + b lambda + c = 0, so every root is known in closed form.
+        _n = 40
+        _rng = np.random.default_rng(7)
+        _b = _rng.uniform(-3.0, -1.0, _n)
+        _c = _rng.uniform(0.05, 0.15, _n)
+        _d = _b * _b - 4 * _c                      # > 0 by construction: real roots
+        _roots = np.sort(np.concatenate([(-_b + np.sqrt(_d)) / 2,
+                                         (-_b - np.sqrt(_d)) / 2]))
+        _mats = [_sp.diags(_c, format="csr"), _sp.diags(_b, format="csr"),
+                 _sp.eye(_n, format="csr")]
+        _centre, _rad = complex(2.0, 0.0), 0.9
+        _want = int((np.abs(_roots - _centre) <= _rad).sum())
+        _r, _secs = runner.solve_blocking(_mats, None, dict(
+            center=_centre, radius=_rad, m0=min(_n, _want + 15),
+            contour_points=16, tol_exponent=12, max_loops=20))
+        _got = np.asarray(_r.eigenvalues)
+        _err = (max(min(abs(_roots - g)) for g in _got) if _r.n_found
+                else float("inf"))
+        _poly_ok = (_r.info == 0 and _r.n_found == _want and _err < 1e-10)
+        say(f"polynom : degree 2, found {_r.n_found}/{_want} roots in the disc, "
+            f"max error vs closed form = {_err:.2e} ({_secs:.2f}s)")
+    except Exception as exc:
+        say(f"polynom : UNAVAILABLE -- {type(exc).__name__}: {exc}")
+
+    try:
+        import scipy.sparse as _sp
+
+        # A discretised 1-D Schrodinger operator with a density-dependent
+        # potential: H(rho) x = lambda x, the nonlinear eigenvector problem.
+        _n = 200
+        _h = 10.0 / (_n - 1)
+        _lap = _sp.diags([-1, 2, -1], [-1, 0, 1], shape=(_n, _n),
+                         format="csr") / (_h * _h)
+        _x = np.linspace(-5, 5, _n)
+        _H0 = (0.5 * _lap + _sp.diags(0.5 * _x ** 2, format="csr")).tocsr()
+        _alpha = 2.0
+        _r, _secs = runner.solve_blocking(_H0, None, dict(
+            emin=0.0, emax=4.0, m0=14, uplo="F",
+            scf=dict(alpha=_alpha, exponent=1.0, mixing=0.4,
+                     tol=1e-7, max_outer=120)))
+        _H = (_H0 + _sp.diags(_alpha * _r.scf_density, format="csr")).tocsr()
+        _X = _r.eigenvectors
+        _res = float(np.max(np.linalg.norm(_H @ _X - _X * _r.eigenvalues, axis=0)))
+        # Uncoupled these are 0.5, 1.5, 2.5...; if the potential did not move
+        # them, the self-consistent part did nothing and the loop is a no-op.
+        _moved = abs(_r.eigenvalues[0] - 0.5) > 1e-3 if _r.n_found else False
+        _scf_ok = bool(_r.scf_converged and _res < 1e-6 and _moved)
+        say(f"selfcons: {_r.scf_iterations} passes, "
+            f"||H(rho)x-lam x||={_res:.2e}, lambda0={_r.eigenvalues[0]:.6f} "
+            f"vs 0.5 uncoupled ({_secs:.2f}s)")
+    except Exception as exc:
+        say(f"selfcons: UNAVAILABLE -- {type(exc).__name__}: {exc}")
+
     # A bundle that solves but ships none of its built-in problems is a
     # broken bundle, so it fails the self-test rather than passing quietly.
-    passed = ok["solved"] and len(_avail) >= 10 and _filter_ok
+    passed = (ok["solved"] and len(_avail) >= 10 and _filter_ok
+              and _poly_ok and _scf_ok)
     say("SELFTEST PASS" if passed else "SELFTEST FAIL")
     flush()
     return 0 if passed else 1
