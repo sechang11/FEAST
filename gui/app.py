@@ -12,10 +12,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# PySide6 before pyqtgraph, and this order is load-bearing. pyqtgraph picks a
+# Qt binding at import time and takes whichever it finds first; on a machine
+# that also has PyQt5 or PySide2 installed it can choose that one, and the two
+# sets of Qt DLLs then collide -- "DLL load failed while importing QtCore: The
+# specified procedure could not be found", from a PySide6 that imports fine on
+# its own. Importing PySide6 first leaves pyqtgraph nothing to decide.
+#
+# The frozen build bundles only PySide6 and never hit this; it appears when
+# running from a source tree with another binding installed, which is exactly
+# the situation someone building on their own machine is in.
+from PySide6.QtCore import Qt, QThread, QTimer, Signal, Slot  # noqa: I001
 import numpy as np
 import pyqtgraph as pg
 import scipy.sparse as sp
-from PySide6.QtCore import Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QFont
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog,
