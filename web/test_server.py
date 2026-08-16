@@ -164,7 +164,11 @@ CS = CS + CS.T                                   # A == A.T, A != A.H
 
 def complex_mtx(M) -> str:
     n = M.shape[0]
-    ent = [f"{i+1} {j+1} {M[i, j].real!r} {M[i, j].imag!r}"
+    # float() first: NumPy 2 changed scalar repr, so f"{np.float64(1.5)!r}"
+    # writes "np.float64(1.5)" into the file and the matrix reader -- correctly
+    # -- refuses it. The failure surfaces as a 400 from /api/bounds, which
+    # reads like the endpoint is broken rather than the fixture.
+    ent = [f"{i+1} {j+1} {float(M[i, j].real)!r} {float(M[i, j].imag)!r}"
            for i in range(n) for j in range(n) if M[i, j] != 0]
     return "\n".join([f"{n} {n} {len(ent)}"] + ent)
 
@@ -173,8 +177,11 @@ CSTXT = complex_mtx(CS)
 cs_true = np.linalg.eigvals(CS)
 check("its spectrum really is complex", np.abs(cs_true.imag).max() > 1.0,
       f"|imag| up to {np.abs(cs_true.imag).max():.1f}")
-b = client.post("/api/bounds", json={"matrix": CSTXT}).json()
-check("it is NOT reported Hermitian", b["hermitian"] is False)
+resp = client.post("/api/bounds", json={"matrix": CSTXT})
+check("inspection succeeds", resp.status_code == 200,
+      "" if resp.status_code == 200 else str(resp.json())[:120])
+b = resp.json()
+check("it is NOT reported Hermitian", b.get("hermitian") is False)
 r = client.post("/api/solve", json={"matrix": CSTXT, "emin": -20, "emax": 20, "m0": 20})
 check("an interval search of it is refused", r.status_code == 400,
       f"status={r.status_code}")

@@ -579,7 +579,7 @@ def check_user_polynomial():
                if M[r, c] != 0]
         with open(path, "w") as fh:
             fh.write("\n".join([f"{n} {n} {len(ent)}"]
-                                + [f"{r} {c} {v!r}" for r, c, v in ent]))
+                                + [f"{r} {c} {float(v)!r}" for r, c, v in ent]))
 
     w = guimod.MainWindow()
     with patch("app.QFileDialog.getOpenFileNames", return_value=(paths, "")),          patch("app.QMessageBox.question", return_value=guimod.QMessageBox.Yes),          patch("app.QMessageBox.warning") as warn:
