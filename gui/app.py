@@ -1369,14 +1369,16 @@ class MainWindow(QMainWindow):
                                 f"Matrix must be square, got {M.shape[0]}x{M.shape[1]}.")
             return
 
-        sym, herm = matrixio.check_symmetry(M)
-        if not (sym or herm):
-            QMessageBox.warning(
-                self, APP_NAME,
-                "This matrix is neither symmetric nor Hermitian.\n\n"
-                "The solvers wired up here require one of those. "
-                "Results would be meaningless.")
-            return
+        # Not a reason to refuse. A non-Hermitian matrix has a complex spectrum
+        # and therefore no interval to search, but the app has had a disc mode
+        # all along -- it is how the built-in system3 is solved. Turning a
+        # user's own matrix away while solving a demo of the same kind was a
+        # gap in the UI, not a limit of the library.
+        #
+        # `herm` alone decides, not `sym or herm`: a complex symmetric matrix
+        # (A == A.T, A != A.H) has a complex spectrum too, and treating it as
+        # Hermitian returns real numbers for it.
+        _, herm = matrixio.check_symmetry(M)
 
         if self._license_blocks(M):
             return
@@ -1391,12 +1393,35 @@ class MainWindow(QMainWindow):
         # sample files are a mix: some ship both triangles, some only the
         # lower one, and only bcsstk11 carries a banner saying so.
         self.poly_matrices = None
-        self._uplo = problems.effective_uplo(M, "F") if sp.issparse(M) else "F"
+        # A non-Hermitian matrix must be stored in full: the general routines
+        # read both triangles, and handing them half a matrix solves a
+        # different problem.
+        self._uplo = ("F" if not herm
+                      else problems.effective_uplo(M, "F") if sp.issparse(M)
+                      else "F")
+
+        if herm:
+            self._set_geometry(problems.INTERVAL)
+        else:
+            # Put the contour somewhere the spectrum actually is. Gershgorin
+            # costs one pass over the nonzeros and beats opening in disc mode
+            # with a stale circle from whatever was loaded before.
+            try:
+                centre, radius = feastpy.spectral_disc(M)
+            except Exception:
+                centre, radius = complex(0.0, 0.0), 1.0
+            self._set_geometry(problems.DISC, centre, radius)
+
         self.matrix_label.setText(matrixio.describe(M))
         self._update_spectrum_view()
         self._refresh_matrix_view(Path(path).name)
         self._log(f"loaded {Path(path).name}: {matrixio.describe(M)} "
                   f"(stored as uplo='{self._uplo}')")
+        if not herm:
+            self._log("  not Hermitian - its eigenvalues are complex, so the "
+                      "search is a disc in the plane rather than an interval; "
+                      f"opened on radius {self._radius:.4g} about "
+                      f"{self._centre:.4g}")
 
         # FEAST names generalized pairs system1.mtx / system1B.mtx, so offer
         # the partner rather than making the user go find it.

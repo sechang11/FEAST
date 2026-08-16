@@ -71,6 +71,68 @@ def check_disc():
     except Exception as exc:
         check("complex spectrum view renders them", False, str(exc)[:60])
 
+    check_user_opens_non_hermitian()
+
+
+def check_user_opens_non_hermitian():
+    """Opening a non-Hermitian matrix from disk, the way a user would.
+
+    The built-in problems reach disc mode through their own metadata, so they
+    pass whatever the file-open path does. That path used to refuse anything
+    not symmetric-or-Hermitian outright -- so the app solved its own
+    non-Hermitian demo while turning away a user's matrix of the same kind.
+    """
+    print("\nopening a non-Hermitian matrix from disk:")
+    import os
+    import tempfile
+    from unittest.mock import patch
+
+    import numpy as np
+    from feastpy import problems, runner
+
+    import app as guimod
+
+    n = 60                                   # Grcar: real, wildly non-normal
+    ent = []
+    for i in range(1, n + 1):
+        if i > 1:
+            ent.append((i, i - 1, -1.0))
+        for k in range(4):
+            if i + k <= n:
+                ent.append((i, i + k, 1.0))
+    path = os.path.join(tempfile.mkdtemp(), "grcar.mtx")
+    with open(path, "w") as fh:
+        fh.write("\n".join([f"{n} {n} {len(ent)}"]
+                           + [f"{i} {j} {v}" for i, j, v in ent]))
+
+    w = guimod.MainWindow()
+    with patch("app.QFileDialog.getOpenFileName", return_value=(path, "")), \
+         patch("app.QMessageBox.warning") as warn, \
+         patch("app.QMessageBox.question", return_value=guimod.QMessageBox.No):
+        w.open_file()
+        check("it is not refused", not warn.called,
+              warn.call_args[0][2][:50] if warn.called else "")
+    check("the matrix is loaded", w.matrix is not None and w.matrix.shape == (n, n))
+    check("the window switches to disc mode", w._geometry == problems.DISC,
+          w._geometry)
+    check("stored in full, as the general routines require", w._uplo == "F")
+    check("the contour opens at 16 points, not 8", w.contour.value() == 16)
+
+    r, _ = runner.solve_blocking(
+        w.matrix, None,
+        dict(center=w._centre, radius=w._radius, m0=n,
+             contour_points=w.contour.value(), tol_exponent=12, max_loops=20))
+    check("and it solves", r.info == 0 and r.n_found == n,
+          f"info={r.info} found={r.n_found}")
+    check("to a small residual", max(r.residuals) < 1e-10,
+          f"max {max(r.residuals):.1e}")
+    ev = np.asarray(r.eigenvalues)
+    check("with a genuinely complex spectrum", np.abs(ev.imag).max() > 1.0,
+          f"|imag| up to {np.abs(ev.imag).max():.2f}")
+    check("and the advice names the disc, not an interval",
+          "disc" in w._diagnose(r).headline.lower()
+          or w._diagnose(r).info == 0, w._diagnose(r).headline)
+
 
 def check_polynomial():
     """A quadratic eigenvalue problem: three coefficient matrices, not one."""
