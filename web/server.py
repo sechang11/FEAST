@@ -215,13 +215,28 @@ def _parse(text: str, what: str, *, require_hermitian: bool = True):
     # segment of the real line depends on that. A disc search is precisely the
     # case where the requirement does not apply, so enforcing it there would
     # reject exactly the matrices the mode exists for.
-    if require_hermitian:
-        sym, herm = matrixio.check_symmetry(M)
-        if not (sym or herm):
-            raise HTTPException(400, f"{what} is neither symmetric nor Hermitian. "
-                                     "Switch to a disc search in the complex "
-                                     "plane, which is the non-Hermitian case.")
+    if require_hermitian and not _is_hermitian(M):
+        raise HTTPException(400, f"{what} is not Hermitian, so its eigenvalues "
+                                 "are not real and there is no interval to "
+                                 "search. Use a disc in the complex plane.")
     return M
+
+
+def _is_hermitian(M) -> bool:
+    """Hermitian, and nothing weaker.
+
+    check_symmetry reports (symmetric, Hermitian) and the two come apart for
+    complex matrices: A == A.T with A != A.H is *complex symmetric*, whose
+    spectrum is complex. Accepting `sym or herm` therefore let such a matrix
+    into the interval routines, which assume real eigenvalues -- and FEAST
+    duly returned a set of real numbers for a spectrum reaching |imag| = 12.
+    No error, no warning, just wrong answers. Only `herm` decides.
+
+    A real symmetric matrix is Hermitian (conjugation is a no-op), so the
+    ordinary case is unaffected.
+    """
+    _, herm = matrixio.check_symmetry(M)
+    return bool(herm)
 
 
 @app.post("/api/bounds")
@@ -236,8 +251,7 @@ def api_bounds(req: SolveRequest, request: Request):
     A = _parse(req.matrix, "The matrix", require_hermitian=False)
     B = _parse(req.b_matrix, "The B matrix", require_hermitian=False)         if req.b_matrix else None
 
-    sym, herm = matrixio.check_symmetry(A)
-    hermitian = bool(sym or herm)
+    hermitian = _is_hermitian(A)
 
     out = {"n": int(A.shape[0]),
            "sparse": bool(sp.issparse(A)),
@@ -251,6 +265,11 @@ def api_bounds(req: SolveRequest, request: Request):
     centre, radius = feastpy.spectral_disc(A, B)
     out["center_re"], out["center_im"] = centre.real, centre.imag
     out["radius"] = radius
+    # Gershgorin bounds A, not the pencil A - lambda B: for a generalized
+    # problem the eigenvalues are scaled by B and routinely fall outside this
+    # disc -- measured at 4 of 20 inside on a random pencil. The page must not
+    # call it a bound in that case, so the guarantee travels with the number.
+    out["disc_is_bound"] = B is None
 
     if hermitian:
         try:
@@ -335,7 +354,8 @@ def api_solve(req: SolveRequest, request: Request):
     diag = feastpy.diagnostics.diagnose(
         r, n=int(A.shape[0]), m0=m0, contour_points=req.contour_points,
         tol_exponent=req.tol_exponent, max_loops=req.max_loops,
-        bounds=_region_bounds(A, B, req), **region)
+        bounds=_region_bounds(A, B, req),
+        bounds_guaranteed=B is None, **region)
 
     return {
         "info": r.info,
@@ -407,10 +427,26 @@ def api_sample(name: str):
         a, b = data / f"{name}.mtx", data / f"{name}B.mtx"
         if not a.exists():
             raise HTTPException(404, "sample not available")
-        return {"name": f"FEAST sample {name} (generalized)",
-                "text": a.read_text(), "b_text": b.read_text() if b.exists() else None,
-                "emin": 0.18, "emax": 1.0,
-                "note": "Ships with FEAST. The reference driver finds 16 eigenvalues here."}
+        out = {"name": f"FEAST sample {name} (generalized)",
+               "text": a.read_text(),
+               "b_text": b.read_text() if b.exists() else None}
+        if name == "system3":
+            # system3 is FEAST's *non-Hermitian* sample: its entries are of
+            # order 1e-18 and it is asymmetric by 9% of that, which is why it
+            # used to be mistaken for Hermitian and searched along an interval
+            # -- returning 13 of its 16 eigenvalues and reporting success.
+            # These are the settings FEAST's own driver uses; the centre sits
+            # 1e-4 off the real axis because a real matrix's conjugate pairs
+            # would otherwise straddle the contour.
+            out.update(mode="disc", center_re=0.59, center_im=1e-4, radius=0.41,
+                       note="Ships with FEAST, and is non-Hermitian despite "
+                            "looking symmetric: entries near 1e-18 with 9% "
+                            "asymmetry. The reference driver finds 16 here.")
+        else:
+            out.update(mode="interval", emin=0.18, emax=1.0,
+                       note="Ships with FEAST. The reference driver finds "
+                            "16 eigenvalues here.")
+        return out
     if name == "grcar":
         # The standard demonstration of a non-normal matrix: banded, real,
         # utterly non-symmetric, and its spectrum is a curve arcing well off

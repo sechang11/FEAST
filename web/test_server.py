@@ -8,6 +8,7 @@ about: which region a request gets, and whether a matrix is allowed into it.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -16,6 +17,12 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "python"))
 sys.path.insert(0, str(HERE))
+
+# The suite makes more requests than one visitor is allowed per minute, and the
+# limit is read at import time. Without this the *last* tests fail with 429 --
+# which looks exactly like the feature under test being broken, and cost a
+# round of debugging the wrong thing.
+os.environ["FEAST_RATE_LIMIT"] = "10000"
 
 from fastapi.testclient import TestClient      # noqa: E402
 
@@ -147,6 +154,86 @@ check("an empty interval still says interval",
       "interval" in r["headline"].lower(), r["headline"])
 text = " ".join(s["text"] for s in r["suggestions"])
 check("...and does not mention a radius", "radius" not in text.lower())
+
+print("\ncomplex symmetric is not Hermitian (the two come apart):")
+rng = np.random.default_rng(0)
+nn = 30
+CS = rng.normal(size=(nn, nn)) + 1j * rng.normal(size=(nn, nn))
+CS = CS + CS.T                                   # A == A.T, A != A.H
+
+
+def complex_mtx(M) -> str:
+    n = M.shape[0]
+    ent = [f"{i+1} {j+1} {M[i, j].real!r} {M[i, j].imag!r}"
+           for i in range(n) for j in range(n) if M[i, j] != 0]
+    return "\n".join([f"{n} {n} {len(ent)}"] + ent)
+
+
+CSTXT = complex_mtx(CS)
+cs_true = np.linalg.eigvals(CS)
+check("its spectrum really is complex", np.abs(cs_true.imag).max() > 1.0,
+      f"|imag| up to {np.abs(cs_true.imag).max():.1f}")
+b = client.post("/api/bounds", json={"matrix": CSTXT}).json()
+check("it is NOT reported Hermitian", b["hermitian"] is False)
+r = client.post("/api/solve", json={"matrix": CSTXT, "emin": -20, "emax": 20, "m0": 20})
+check("an interval search of it is refused", r.status_code == 400,
+      f"status={r.status_code}")
+r = client.post("/api/solve", json={"matrix": CSTXT, "center_re": b["center_re"],
+                                    "center_im": b["center_im"],
+                                    "radius": b["radius"], "m0": 30,
+                                    "contour_points": 16}).json()
+check("a disc search of it works", r.get("info") == 0 and r.get("n_found") == nn,
+      f"found {r.get('n_found')}/{nn}")
+got = np.array([complex(a, c) for a, c in r["eigenvalues"]])
+check("and matches the true spectrum",
+      max(min(abs(cs_true - g)) for g in got) < 1e-9,
+      f"max err {max(min(abs(cs_true - g)) for g in got):.1e}")
+
+print("\nthe Gershgorin disc is only called a bound where it is one:")
+An = rng.normal(size=(20, 20))
+Bn = np.eye(20) * 0.05 + 0.001 * rng.normal(size=(20, 20))
+Bn = Bn + Bn.T
+gen = client.post("/api/bounds", json={"matrix": dense_mtx(An),
+                                       "b_matrix": dense_mtx(Bn)}).json()
+check("a standard problem's disc is flagged as a bound",
+      client.post("/api/bounds", json={"matrix": GRCAR}).json()["disc_is_bound"] is True)
+check("a generalized problem's disc is not", gen["disc_is_bound"] is False)
+import scipy.linalg as _sla                                     # noqa: E402
+pencil = _sla.eig(An, Bn, right=False)
+inside = int(np.sum(np.abs(pencil - complex(gen["center_re"], gen["center_im"]))
+                    <= gen["radius"]))
+check("...and indeed it does not contain the pencil's spectrum", inside < 20,
+      f"{inside}/20 inside")
+
+print("\nsymmetry is judged relative to the matrix, not against 1e-10:")
+tiny = (np.diag([1.0, 2.0, 3.0]) + np.diag([0.5, 0.5], 1)
+        + np.diag([0.5, 0.5], -1)) * 1e-18
+from feastpy import matrixio as _mio                            # noqa: E402
+check("a symmetric matrix scaled to 1e-18 is still symmetric",
+      _mio.check_symmetry(tiny) == (True, True))
+skew = tiny.copy()
+skew[0, 1] *= 1.1                                # 10% asymmetry, absolute 5e-20
+check("...and a 10% asymmetry at that scale is caught",
+      _mio.check_symmetry(skew) == (False, False),
+      f"got {_mio.check_symmetry(skew)}")
+
+print("\nFEAST's own system3 is non-Hermitian and routed as one:")
+s3 = client.get("/api/samples/system3").json()
+check("system3 ships as a disc problem", s3.get("mode") == "disc")
+b3 = client.post("/api/bounds", json={"matrix": s3["text"],
+                                      "b_matrix": s3["b_text"]}).json()
+check("...and is reported non-Hermitian", b3["hermitian"] is False)
+r = client.post("/api/solve", json={"matrix": s3["text"], "b_matrix": s3["b_text"],
+                                    "emin": 0.18, "emax": 1.0, "m0": 40})
+check("...so an interval search of it is refused", r.status_code == 400)
+r = client.post("/api/solve", json={"matrix": s3["text"], "b_matrix": s3["b_text"],
+                                    "center_re": s3["center_re"],
+                                    "center_im": s3["center_im"],
+                                    "radius": s3["radius"], "m0": 30,
+                                    "contour_points": 16}).json()
+check("...and the disc search finds all 16, not 13",
+      r.get("info") == 0 and r.get("n_found") == 16,
+      f"info={r.get('info')} found={r.get('n_found')}")
 
 print("\nthe non-Hermitian sample is real and solvable:")
 s = client.get("/api/samples/grcar").json()

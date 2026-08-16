@@ -57,7 +57,8 @@ def diagnose(result, *, n: int, m0: int, contour_points: int, tol_exponent: int,
              emax: Optional[float] = None,
              center: Optional[complex] = None,
              radius: Optional[float] = None,
-             bounds: Optional[tuple] = None) -> Diagnosis:
+             bounds: Optional[tuple] = None,
+             bounds_guaranteed: bool = True) -> Diagnosis:
     """Explain a FeastResult and propose fixes.
 
     The search region is either an interval (`emin`/`emax`, Hermitian) or a
@@ -119,13 +120,19 @@ def diagnose(result, *, n: int, m0: int, contour_points: int, tol_exponent: int,
         if disc:
             s.append(wider)
             if bounds is not None:
-                # For a disc, `bounds` is the Gershgorin (centre, radius) that
-                # provably contains everything -- so this is not "try bigger",
-                # it is "here is a circle the spectrum cannot escape".
+                # For a disc, `bounds` is a Gershgorin (centre, radius). It
+                # bounds A -- for a pencil the eigenvalues are scaled by B and
+                # can lie far outside it, measured at 4 of 20 inside on a
+                # random pencil. So the containment is claimed only where it
+                # holds; promising a bound that is not one is worse than
+                # offering no disc at all.
+                claim = ("Every eigenvalue is inside it."
+                         if bounds_guaranteed else
+                         "For a generalized problem this bounds A rather than "
+                         "the pencil, so treat it as a place to start.")
                 s.append(Suggestion(
-                    f"Search the disc that bounds the whole spectrum: radius "
-                    f"{bounds[1]:.6g} about {_fmt_c(bounds[0])}. Every "
-                    "eigenvalue is inside it.",
+                    f"Try the disc from A's Gershgorin bound: radius "
+                    f"{bounds[1]:.6g} about {_fmt_c(bounds[0])}. {claim}",
                     "disc", (complex(bounds[0]).real, complex(bounds[0]).imag,
                              float(bounds[1]))))
         elif bounds is not None:

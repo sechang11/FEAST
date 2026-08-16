@@ -131,6 +131,9 @@ $("load-sample").addEventListener("click", async () => {
       $("emin").value = d.emin;
       $("emax").value = d.emax;
     }
+    // The sample's region is a chosen one, not a leftover, so protect it from
+    // Inspect's defaults exactly as if the user had typed it.
+    $("emin").dataset.touched = "1";
     setStatus($("matinfo"), `${d.name}. ${d.note || ""}`);
   } catch (e) {
     setStatus($("matinfo"), e.message, true);
@@ -145,11 +148,18 @@ $("inspect").addEventListener("click", async () => {
     const d = await post("/api/bounds", payload());
     offerModes(d.hermitian);
 
+    // Gershgorin bounds A, not the pencil, so "all eigenvalues lie within" is
+    // simply false for a generalized problem -- on a random pencil only 4 of
+    // 20 were inside. Claim the bound only when the server says it holds.
     let where;
     if (d.hermitian && d.emin !== undefined) {
       where = `all eigenvalues lie in [${fmt(d.emin)}, ${fmt(d.emax)}]`;
-    } else {
+    } else if (d.disc_is_bound) {
       where = `all eigenvalues lie within ${fmt(d.radius)} of ${fmtC([d.center_re, d.center_im])}`;
+    } else {
+      where = "generalized, so there is no cheap bound on where the eigenvalues" +
+              " are — A's own Gershgorin disc does not bound the pencil. Choose" +
+              " a disc from what you know of the problem.";
     }
     setStatus($("matinfo"),
       `${d.sparse ? "sparse" : "dense"} ${d.n}×${d.n}, ` +
@@ -160,12 +170,23 @@ $("inspect").addEventListener("click", async () => {
       ` — ${where}`);
 
     // Offer the whole spectrum: guessing a region blind is the main way to get
-    // an empty result.
+    // an empty result. Two things must not be overwritten, though.
+    //
+    // A region the user typed, or one a sample supplied -- system3 ships the
+    // centre and radius FEAST's own driver uses, and replacing them with a
+    // computed guess turned a 16-eigenvalue solve into an empty one.
+    //
+    // And a generalized problem's disc, which bounds A rather than the pencil.
+    // For system3 that is a radius of 5e-18 around zero while the eigenvalues
+    // are near 0.6: filling it in would hand the user a region guaranteed to
+    // find nothing. Report it, do not adopt it.
     if (!$("emin").dataset.touched) {
       if (d.emin !== undefined) { $("emin").value = d.emin; $("emax").value = d.emax; }
-      $("cre").value = round4(d.center_re);
-      $("cim").value = round4(d.center_im);
-      $("rad").value = round4(d.radius);
+      if (d.disc_is_bound) {
+        $("cre").value = round4(d.center_re);
+        $("cim").value = round4(d.center_im);
+        $("rad").value = round4(d.radius);
+      }
     }
   } catch (e) {
     setStatus($("matinfo"), e.message, true);

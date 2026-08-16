@@ -100,15 +100,33 @@ def describe(M) -> str:
 
 
 def check_symmetry(M, tol: float = 1e-10) -> tuple[bool, bool]:
-    """Return (is_symmetric, is_hermitian). FEAST's sy/he routines require one."""
+    """Return (is_symmetric, is_hermitian). FEAST's sy/he routines require one.
+
+    The tolerance is *relative* to the largest entry, and that matters more
+    than it sounds. FEAST's own system3 has entries of order 1e-18 and an
+    asymmetry of 2.6e-19 -- genuinely non-symmetric, by 9% -- yet any absolute
+    tolerance above 1e-18 calls it symmetric. It was then solved by the
+    Hermitian interval routines, which returned 13 eigenvalues where the true
+    count is 16, with info=0 and residuals of 1e-13: the residual is computed
+    against the symmetrised problem, so nothing anywhere looked wrong.
+
+    Scaling by the matrix norm makes the test mean "symmetric to working
+    precision" for a matrix of any magnitude, which is the question actually
+    being asked.
+    """
     if sp.issparse(M):
+        scale = abs(M).max() if M.nnz else 0.0
+        atol = tol * scale if scale > 0 else tol
         d = abs(M - M.T)
-        sym = (d.max() if d.nnz else 0.0) <= tol
+        sym = (d.max() if d.nnz else 0.0) <= atol
         dh = abs(M - M.getH())
-        herm = (dh.max() if dh.nnz else 0.0) <= tol
+        herm = (dh.max() if dh.nnz else 0.0) <= atol
         return bool(sym), bool(herm)
-    sym = bool(np.allclose(M, M.T, atol=tol))
-    herm = bool(np.allclose(M, M.conj().T, atol=tol))
+    M = np.asarray(M)
+    scale = float(np.abs(M).max()) if M.size else 0.0
+    atol = tol * scale if scale > 0 else tol
+    sym = bool(np.allclose(M, M.T, rtol=0.0, atol=atol))
+    herm = bool(np.allclose(M, M.conj().T, rtol=0.0, atol=atol))
     return sym, herm
 
 
