@@ -14,7 +14,9 @@ class MatrixLoadError(ValueError):
     pass
 
 
-SUPPORTED = "Matrix Market (*.mtx *.mtx.gz);;CSV (*.csv *.txt);;NumPy (*.npy *.npz);;All files (*)"
+SUPPORTED = ("Matrix Market (*.mtx *.mtx.gz);;CSV (*.csv *.txt);;"
+             "NumPy (*.npy *.npz);;CSR arrays (*.csr *.txt *.dat);;"
+             "All files (*)")
 
 
 def load_matrix(path: str | Path):
@@ -137,6 +139,187 @@ def _read_bare_coordinate(path: Path):
     dtype = complex if any(isinstance(v, complex) for v in vals) else float
     return sp.coo_matrix((np.array(vals, dtype=dtype), (rows, cols)),
                          shape=(n, m)).tocsr()
+
+
+def read_csr_arrays(*sources, n: Optional[int] = None):
+    """Build a matrix from FEAST's own three CSR arrays: sa, ja, ia.
+
+    This is the form the C and Fortran interfaces take directly --
+
+        dfeast_scsrev(&uplo, &n, sa, isa, jsa, fpm, ...)
+
+    -- so anyone already calling FEAST from their own code has the matrix in
+    exactly these arrays and no reason to convert it to coordinate format
+    first.
+
+    Accepts either one file holding all three arrays in order (sa, then ja,
+    then ia; any whitespace or line arrangement) or three files given in that
+    order. An optional leading "n nnz" or "n n nnz" header is consumed if
+    present, but nothing depends on it.
+
+    There is no standard file layout for a CSR triple, and the two plausible
+    index bases -- 0 from SciPy, 1 from Fortran -- describe *different
+    matrices* from identical digits. Guessing would be the worst kind of bug
+    this project can ship, so nothing is guessed: the row-pointer array is
+    self-describing and everything is derived from it.
+
+      * ia has n+1 entries, is non-decreasing, starts at the base and ends at
+        base + nnz
+      * sa and ja both have exactly nnz entries
+      * every column index lies inside [base, base + ncols)
+
+    A layout that does not satisfy all of that is refused with the reason,
+    rather than loaded as something else. When the split is ambiguous -- more
+    than one (n, base) fits the token count -- that is also a refusal.
+    """
+    import numpy as np
+    import scipy.sparse as sp
+
+    texts = []
+    for s in sources:
+        p = Path(s)
+        if not p.exists():
+            raise MatrixLoadError(f"file not found: {p}")
+        texts.append(p.read_text())
+
+    if len(texts) == 3:
+        sa = _tokens(texts[0], "sa (values)")
+        ja = _tokens(texts[1], "ja (column indices)")
+        ia = _tokens(texts[2], "ia (row pointers)")
+        return _assemble_csr(sa, ja, ia, n=n)
+
+    if len(texts) != 1:
+        raise MatrixLoadError(
+            "give either one file containing sa, ja and ia in that order, "
+            f"or three files in that order; got {len(texts)}")
+
+    toks = _tokens(texts[0], "the CSR file")
+
+    # An explicit header removes all ambiguity, so use it when it is there.
+    head = [ln for ln in texts[0].splitlines() if ln.strip()
+            and not ln.strip().startswith(("%", "#", "!"))]
+    if head:
+        first = head[0].split()
+        if len(first) in (2, 3) and all(_is_int(x) for x in first):
+            declared_n = int(first[0])
+            declared_nnz = int(first[-1])
+            rest = toks[len(first):]
+            if len(rest) == 2 * declared_nnz + declared_n + 1:
+                return _assemble_csr(rest[:declared_nnz],
+                                     rest[declared_nnz:2 * declared_nnz],
+                                     rest[2 * declared_nnz:], n=declared_n)
+
+    # No usable header: recover the split from the pointer array's shape.
+    # For an n-row matrix the file holds nnz + nnz + (n+1) numbers, and the
+    # trailing n+1 of them must be a valid pointer array. Only accept a split
+    # that is unique.
+    total = len(toks)
+    fits = []
+    for rows in range(1, total):
+        nnz2 = total - rows - 1
+        if nnz2 < 0 or nnz2 % 2:
+            continue
+        nnz = nnz2 // 2
+        tail = toks[2 * nnz:]
+        if len(tail) != rows + 1:
+            continue
+        try:
+            _validate_pointers(tail, nnz)
+        except MatrixLoadError:
+            continue
+        fits.append((rows, nnz))
+
+    if not fits:
+        raise MatrixLoadError(
+            "this does not look like sa/ja/ia: no split of the "
+            f"{total} numbers leaves a valid row-pointer array. A CSR file "
+            "should hold nnz values, then nnz column indices, then n+1 row "
+            "pointers.")
+    if len(fits) > 1:
+        shapes = ", ".join(f"n={r} nnz={z}" for r, z in fits[:3])
+        raise MatrixLoadError(
+            f"ambiguous CSR file: {len(fits)} different shapes fit these "
+            f"numbers ({shapes}...). Add a header line 'n nnz', or supply "
+            "sa, ja and ia as three separate files.")
+
+    rows, nnz = fits[0]
+    return _assemble_csr(toks[:nnz], toks[nnz:2 * nnz], toks[2 * nnz:], n=rows)
+
+
+def _is_int(tok: str) -> bool:
+    try:
+        int(tok)
+        return True
+    except ValueError:
+        return False
+
+
+def _tokens(text: str, what: str) -> list:
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith(("%", "#", "!")):
+            continue
+        for tok in line.replace("D", "e").replace("d", "e").split():
+            try:
+                out.append(float(tok))
+            except ValueError:
+                raise MatrixLoadError(
+                    f"{what}: {tok!r} is not a number") from None
+    if not out:
+        raise MatrixLoadError(f"{what}: no numbers found")
+    return out
+
+
+def _validate_pointers(ia, nnz: int):
+    """ia must be non-decreasing integers spanning exactly nnz entries."""
+    if any(abs(v - round(v)) > 1e-9 for v in ia):
+        raise MatrixLoadError("row pointers must be integers")
+    vals = [int(round(v)) for v in ia]
+    base = vals[0]
+    if base not in (0, 1):
+        raise MatrixLoadError(
+            f"row pointers must start at 0 or 1, they start at {base}")
+    if any(b < a for a, b in zip(vals, vals[1:])):
+        raise MatrixLoadError("row pointers must be non-decreasing")
+    if vals[-1] != base + nnz:
+        raise MatrixLoadError(
+            f"row pointers end at {vals[-1]}, but with base {base} and "
+            f"{nnz} stored entries they must end at {base + nnz}")
+    return vals, base
+
+
+def _assemble_csr(sa, ja, ia, n: Optional[int] = None):
+    import numpy as np
+    import scipy.sparse as sp
+
+    if len(sa) != len(ja):
+        raise MatrixLoadError(
+            f"sa has {len(sa)} values but ja has {len(ja)} column indices; "
+            "they must match")
+    nnz = len(sa)
+    if n is not None and len(ia) != n + 1:
+        raise MatrixLoadError(
+            f"ia has {len(ia)} entries; for n={n} rows it must have {n + 1}")
+    vals, base = _validate_pointers(ia, nnz)
+    rows = len(vals) - 1
+
+    cols = [int(round(c)) for c in ja]
+    if any(abs(c - round(c)) > 1e-9 for c in ja):
+        raise MatrixLoadError("column indices must be integers")
+    lo, hi = (min(cols), max(cols)) if cols else (base, base)
+    if lo < base or hi >= base + rows:
+        raise MatrixLoadError(
+            f"column indices run {lo}..{hi}, outside [{base}, {base + rows}) "
+            f"for a {rows}x{rows} matrix. Check the index base: FEAST's "
+            "Fortran arrays are 1-based, SciPy's are 0-based.")
+
+    indptr = np.array([v - base for v in vals], dtype=np.int64)
+    indices = np.array([c - base for c in cols], dtype=np.int64)
+    data = np.array(sa, dtype=np.float64)
+    M = sp.csr_matrix((data, indices, indptr), shape=(rows, rows))
+    M.sort_indices()
+    return M
 
 
 def describe(M) -> str:

@@ -542,5 +542,65 @@ for _name, _text, _shape in (
         f"dense {_name} is not mistaken for coordinate",
         not sp.issparse(_M) and _dn.shape == _shape, str(_dn.shape)))
 
+
+# --- CSR arrays: sa, ja, ia, the form FEAST's own interfaces take ------------
+# The index base is the whole risk here: 0 from SciPy and 1 from Fortran
+# describe different matrices from identical digits, so it is derived from the
+# row-pointer array rather than assumed.
+_Acsr = np.array([[4., 1., 0.], [1., 3., 1.], [0., 1., 2.]])
+_S = sp.csr_matrix(_Acsr)
+
+
+def _csr_text(base, sep="\n"):
+    return sep.join([" ".join(repr(v) for v in _S.data),
+                     " ".join(str(x + base) for x in _S.indices),
+                     " ".join(str(x + base) for x in _S.indptr)]) + "\n"
+
+
+for _base, _tag in ((1, "1-based (Fortran/FEAST)"), (0, "0-based (SciPy)")):
+    for _sep, _shape in (("\n", "three lines"), (" ", "one line")):
+        _M = matrixio.read_csr_arrays(_w(f"csr_{_base}_{len(_sep)}.csr",
+                                         _csr_text(_base, _sep)))
+        results.append(check(
+            f"CSR arrays, {_tag}, {_shape}",
+            sp.issparse(_M) and np.allclose(_M.toarray(), _Acsr),
+            str(_M.shape)))
+
+    _M = matrixio.read_csr_arrays(_w(f"h_{_base}.csr", "3 7\n" + _csr_text(_base)))
+    results.append(check(f"CSR arrays with an 'n nnz' header, {_tag}",
+                         np.allclose(_M.toarray(), _Acsr)))
+
+    _M = matrixio.read_csr_arrays(
+        _w(f"sa_{_base}.txt", " ".join(repr(v) for v in _S.data)),
+        _w(f"ja_{_base}.txt", " ".join(str(x + _base) for x in _S.indices)),
+        _w(f"ia_{_base}.txt", " ".join(str(x + _base) for x in _S.indptr)))
+    results.append(check(f"CSR arrays as three files, {_tag}",
+                         np.allclose(_M.toarray(), _Acsr)))
+
+# A larger matrix, exactly round-tripped: the small case would not catch an
+# off-by-one in the pointer array.
+_B = sp.random(200, 200, density=0.02, random_state=0, format="csr")
+_B = (_B + _B.T).tocsr() + sp.eye(200, format="csr") * 5
+_M = matrixio.read_csr_arrays(_w("big.csr",
+    " ".join(repr(v) for v in _B.data) + "\n"
+    + " ".join(str(x + 1) for x in _B.indices) + "\n"
+    + " ".join(str(x + 1) for x in _B.indptr) + "\n"))
+results.append(check("CSR round-trip on a 200x200 is exact",
+                     _M.shape == _B.shape and abs(_M - _B).max() == 0,
+                     f"nnz {_M.nnz}"))
+
+# Malformed input must be refused, never loaded as a different matrix.
+for _name, _text in (
+        ("a column index outside the matrix", "4.0 1.0\n1 9\n1 2 3\n"),
+        ("sa and ja of different lengths", "4.0 1.0 3.0\n1 2\n1 3 4\n"),
+        ("row pointers that decrease", "4.0 1.0\n1 2\n1 3 2\n"),
+        ("row pointers ending at the wrong value", "4.0 1.0\n1 2\n1 2 9\n"),
+        ("a dense table, which is not CSR at all", "4 1 0\n1 3 1\n0 1 2\n")):
+    try:
+        matrixio.read_csr_arrays(_w("bad.csr", _text))
+        results.append(check(f"CSR refuses {_name}", False, "it loaded"))
+    except matrixio.MatrixLoadError:
+        results.append(check(f"CSR refuses {_name}", True))
+
 print(f"\n{sum(results)}/{len(results)} passed")
 raise SystemExit(0 if all(results) else 1)

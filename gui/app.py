@@ -805,6 +805,10 @@ class MainWindow(QMainWindow):
         m = self.menuBar().addMenu("&File")
         a = QAction("&Open matrix...", self); a.setShortcut("Ctrl+O")
         a.triggered.connect(self.open_file); m.addAction(a)
+        a = QAction("Open CSR &arrays...", self)
+        a.setStatusTip("sa, ja, ia -- the three arrays FEAST's C and Fortran "
+                       "interfaces take directly")
+        a.triggered.connect(self.open_csr); m.addAction(a)
         a = QAction("Open &polynomial problem...", self)
         a.setShortcut("Ctrl+Shift+O")
         a.setStatusTip("A0 + λA1 + λ²A2 + ... = 0, one file per "
@@ -1405,6 +1409,101 @@ class MainWindow(QMainWindow):
         self._log(f"generated {label}: {matrixio.describe(A)}")
         # A fresh random spectrum makes the previous interval meaningless.
         self.use_full_range()
+
+    @Slot()
+    def open_csr(self):
+        """Load a matrix from FEAST's own three CSR arrays: sa, ja, ia.
+
+        The form the C and Fortran interfaces take directly, so anyone already
+        calling FEAST from their own code has the matrix in exactly these
+        arrays. Accepts one file holding all three in order, or three files
+        selected together -- they are matched to sa/ja/ia by name where the
+        names make it obvious, and otherwise by selection order.
+        """
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Open CSR arrays (one file with sa, ja, ia -- or three files)",
+            "", "CSR arrays (*.csr *.txt *.dat);;All files (*)")
+        if not paths:
+            return
+        if len(paths) not in (1, 3):
+            QMessageBox.warning(
+                self, APP_NAME,
+                f"Select one file containing sa, ja and ia, or three files "
+                f"holding them separately. You selected {len(paths)}.")
+            return
+
+        if len(paths) == 3:
+            # File dialogs return selections in an arbitrary order, and the
+            # arrays are not interchangeable: reading ja as ia builds a
+            # different matrix rather than failing. Order by name when the
+            # names say which is which, and only then fall back to the order
+            # given.
+            def rank(p):
+                stem = Path(p).stem.lower()
+                for i, key in enumerate(("sa", "ja", "ia")):
+                    if stem.endswith(key) or stem.startswith(key):
+                        return i
+                return 99
+            ranked = sorted(paths, key=rank)
+            if [rank(p) for p in ranked] != [0, 1, 2]:
+                ans = QMessageBox.question(
+                    self, APP_NAME,
+                    "The file names do not say which array is which, so they "
+                    "will be read in the order selected:\n\n"
+                    + "\n".join(f"{k} = {Path(p).name}"
+                                for k, p in zip(("sa (values)",
+                                                 "ja (column indices)",
+                                                 "ia (row pointers)"), paths))
+                    + "\n\nIs that right?")
+                if ans != QMessageBox.Yes:
+                    return
+            else:
+                paths = ranked
+
+        try:
+            M = matrixio.read_csr_arrays(*paths)
+        except matrixio.MatrixLoadError as exc:
+            QMessageBox.warning(self, APP_NAME, str(exc))
+            return
+        except Exception as exc:                      # malformed, not a crash
+            QMessageBox.warning(self, APP_NAME,
+                                f"Could not read the CSR arrays: {exc}")
+            return
+
+        if self._license_blocks(M):
+            return
+
+        _, herm = matrixio.check_symmetry(M)
+        self.matrix = M
+        self.matrix_path = paths[0]
+        self.b_matrix = None
+        self.b_path = None
+        self.poly_matrices = None
+        self._clear_demo_selection()
+        self.clear_b_btn.setEnabled(False)
+        self.b_label.setText("no B - standard problem A x = λ x")
+        # CSR arrays carry whatever triangle the author stored, and nothing in
+        # the file says which. Full storage is the only safe reading: assuming
+        # a half would silently drop the other one.
+        self._uplo = "F"
+
+        if herm:
+            self._set_geometry(problems.INTERVAL)
+        else:
+            try:
+                centre, radius = feastpy.spectral_disc(M)
+            except Exception:
+                centre, radius = complex(0.0, 0.0), 1.0
+            self._set_geometry(problems.DISC, centre, radius)
+
+        self.matrix_label.setText(matrixio.describe(M))
+        self._update_spectrum_view()
+        self._refresh_matrix_view(Path(paths[0]).name)
+        self._log(f"loaded CSR arrays from "
+                  + ", ".join(Path(p).name for p in paths)
+                  + f": {matrixio.describe(M)}")
+        if not herm:
+            self._log("  not Hermitian - searching a disc in the complex plane")
 
     @Slot()
     def open_polynomial(self):
