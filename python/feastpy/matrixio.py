@@ -49,12 +49,60 @@ def load_matrix(path: str | Path):
                 return data[list(data.keys())[0]]
         # Fall through to delimited text; sniff the separator.
         text = path.read_text().strip()
+        # ...but decide coordinate-vs-dense from the content, not the name.
+        # Coordinate files are not always called .mtx -- .dat and .txt are
+        # common -- and read as dense they become the triplet table itself:
+        # "2 2 2 / 1 1 5.0 / 2 2 7.0" loaded as a 3x3 of indices, which is
+        # square, passes every downstream guard, and gets solved. A wrong
+        # matrix with no error is worse than a refusal.
+        if _looks_like_coordinate(text):
+            return _read_bare_coordinate(path)
         delim = "," if "," in text.splitlines()[0] else None
         return np.loadtxt(str(path), delimiter=delim)
     except MatrixLoadError:
         raise
     except Exception as exc:
         raise MatrixLoadError(f"could not read {path.name}: {exc}") from exc
+
+
+def _looks_like_coordinate(text: str) -> bool:
+    """Is this banner-less coordinate format rather than a dense table?
+
+    The test is the header's own claim: a coordinate file opens with
+    "nrow ncol nnz", and nnz must equal the number of data lines that follow.
+    Requiring that agreement is what keeps it from firing on a genuine dense
+    3-column table, where the first row is data and the count would only match
+    by coincidence.
+
+    Deliberately strict. Guessing wrong in this direction turns a dense matrix
+    into a sparse one built from its own first row, which is the same class of
+    silent error this is here to prevent.
+    """
+    lines = [ln.strip() for ln in text.splitlines()]
+    lines = [ln for ln in lines if ln and not ln.startswith(("%", "#", "!"))]
+    if len(lines) < 2:
+        return False
+    head = lines[0].split()
+    if len(head) != 3:
+        return False
+    try:
+        nrow, ncol, nnz = (int(x) for x in head)
+    except ValueError:
+        return False                      # a float in the header: dense data
+    if nrow <= 0 or ncol <= 0 or nnz < 0 or nnz != len(lines) - 1:
+        return False
+    # Every data line must start with a plausible 1-based index pair.
+    for ln in lines[1:]:
+        parts = ln.split()
+        if len(parts) < 3:
+            return False
+        try:
+            i, j = int(parts[0]), int(parts[1])
+        except ValueError:
+            return False
+        if not (1 <= i <= nrow and 1 <= j <= ncol):
+            return False
+    return True
 
 
 def _read_bare_coordinate(path: Path):

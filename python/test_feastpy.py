@@ -487,5 +487,60 @@ results.append(check("complex filter is 1 inside the disc and small outside",
                      abs(abs(_fc[0]) - 1) < 1e-6 and abs(_fc[2]) < 1e-3,
                      f"centre={abs(_fc[0]):.6f}, outside={abs(_fc[2]):.2e}"))
 
+
+# --- file loading: the format is decided by content, not by filename ---------
+# A coordinate file is not always called .mtx. Read as a dense table it becomes
+# its own triplet list, and "2 2 2 / 1 1 5.0 / 2 2 7.0" then loads as a 3x3 of
+# indices -- square, so it passes every downstream guard and gets solved as if
+# it were the matrix. A wrong matrix with no error is worse than a refusal.
+import os as _os
+import tempfile as _tf
+
+_d = _tf.mkdtemp()
+_A = np.array([[4., 1., 0.], [1., 3., 1.], [0., 1., 2.]])
+_coord = "3 3 7\n" + "\n".join(
+    f"{i+1} {j+1} {_A[i, j]!r}"
+    for i in range(3) for j in range(3) if _A[i, j] != 0)
+
+
+def _w(name, text):
+    p = _os.path.join(_d, name)
+    with open(p, "w") as fh:
+        fh.write(text)
+    return p
+
+
+def _dense_of(M):
+    return M.toarray() if sp.issparse(M) else np.asarray(M)
+
+
+for _name in ("m.mtx", "m.dat", "m.txt", "m.coo", "noext"):
+    _M = matrixio.load_matrix(_w(_name, _coord))
+    _dn = _dense_of(_M)
+    results.append(check(
+        f"coordinate file named {_name} loads as the matrix it describes",
+        sp.issparse(_M) and _dn.shape == (3, 3) and np.allclose(_dn, _A),
+        str(_dn.shape)))
+
+_M = matrixio.load_matrix(_w("tiny.dat", "2 2 2\n1 1 5.0\n2 2 7.0\n"))
+_dn = _dense_of(_M)
+results.append(check(
+    "a coordinate file that would be square-but-wrong as dense is not",
+    _dn.shape == (2, 2) and np.allclose(_dn, [[5., 0.], [0., 7.]]),
+    str(_dn.tolist())))
+
+# The guard must be strict in the other direction too: a genuine dense table
+# must not be reinterpreted as coordinate. The third case has a header that
+# looks like one but whose nnz disagrees with the number of data lines.
+for _name, _text, _shape in (
+        ("dense.txt", "\n".join(" ".join(repr(v) for v in r) for r in _A), (3, 3)),
+        ("dense.csv", "\n".join(",".join(repr(v) for v in r) for r in _A), (3, 3)),
+        ("table.txt", "3 3 7\n1 1 4\n1 2 1\n2 1 1", (4, 3))):
+    _M = matrixio.load_matrix(_w(_name, _text))
+    _dn = _dense_of(_M)
+    results.append(check(
+        f"dense {_name} is not mistaken for coordinate",
+        not sp.issparse(_M) and _dn.shape == _shape, str(_dn.shape)))
+
 print(f"\n{sum(results)}/{len(results)} passed")
 raise SystemExit(0 if all(results) else 1)
