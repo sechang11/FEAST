@@ -1,6 +1,7 @@
 """Loading matrices from the formats users actually have on disk."""
 from __future__ import annotations
 
+import gzip
 import sys
 from pathlib import Path
 from typing import Optional
@@ -114,7 +115,13 @@ def _read_bare_coordinate(path: Path):
     """
     rows, cols, vals = [], [], []
     n = m = None
-    with path.open() as fh:
+    # scipy's mmread decompresses .gz itself, but this fallback runs precisely
+    # when mmread refused the file -- a banner-less coordinate file -- and a
+    # gzipped one of those would otherwise arrive as binary and fail on a
+    # decode error rather than being read.
+    opener = (lambda: gzip.open(path, "rt")) if path.suffix == ".gz" \
+        else path.open
+    with opener() as fh:
         for line in fh:
             line = line.strip()
             if not line or line.startswith(("%", "#", "!")):

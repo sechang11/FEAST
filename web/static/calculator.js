@@ -20,7 +20,7 @@ const isDisc = () => mode() === "disc";
 function payload() {
   const b = $("bmatrix").value.trim();
   const p = {
-    matrix: $("matrix").value,
+    matrix: matrixText(),
     b_matrix: b ? b : null,
     m0: parseInt($("m0").value, 10) || 40,
     contour_points: parseInt($("cp").value, 10) || 8,
@@ -65,7 +65,8 @@ function setStatus(el, text, isError) {
 }
 
 function needMatrix() {
-  if (!$("matrix").value.trim()) throw new Error("Paste a matrix first, or load a sample.");
+  if (!matrixText()) throw new Error(
+    "Load a matrix file first, or paste one, or pick a sample.");
 }
 
 // ---- search region ---------------------------------------------------------
@@ -106,6 +107,71 @@ function offerModes(hermitian) {
   applyMode();
 }
 
+// ---- file upload -----------------------------------------------------------
+/* Pasting stops being usable somewhere in the low thousands of nonzeros, and
+   the matrices worth solving start above that. The file is parsed on the
+   server by the same reader the desktop app uses -- which is what lets .npy,
+   .npz and .gz work at all, since none of them are text -- and comes back as
+   text the existing endpoints already accept. One solve path, not two.
+
+   The paste box stays. It is better for a small matrix you want to edit. */
+let uploaded = null;          // text of the matrix loaded from a file
+
+$("matfile").addEventListener("change", async (ev) => {
+  const f = ev.target.files && ev.target.files[0];
+  if (!f) return;
+  setStatus($("fileinfo"), `reading ${f.name}…`);
+  try {
+    const body = new FormData();
+    body.append("file", f);
+    const res = await fetch("/api/upload", { method: "POST", body });
+    const d = await res.json().catch(() => ({ detail: res.statusText }));
+    if (!res.ok) throw new Error(detailText(d) || `upload failed (${res.status})`);
+
+    uploaded = d.text;
+    // Show the matrix only when it is small enough to be worth looking at.
+    // Dropping a megabyte of coordinates into a textarea freezes the page,
+    // and the user did not ask to read it -- they asked to solve it.
+    if (d.text.length <= 200000) {
+      $("matrix").value = d.text;
+    } else {
+      $("matrix").value = "";
+      $("matrix").placeholder =
+        `${d.name} is loaded (${d.describe}) — too large to display here, ` +
+        "but it will be solved.";
+    }
+    offerModes(d.hermitian);
+    if (d.hermitian && d.emin !== undefined) {
+      $("emin").value = d.emin;
+      $("emax").value = d.emax;
+    }
+    if (d.disc_is_bound) {
+      $("cre").value = round4(d.center_re);
+      $("cim").value = round4(d.center_im);
+      $("rad").value = round4(d.radius);
+    }
+    // A loaded matrix comes with a region chosen from its own spectrum, so
+    // protect it from Inspect's defaults exactly as a sample's would be.
+    $("emin").dataset.touched = "1";
+    setStatus($("fileinfo"),
+      `${d.name}: ${d.describe}, ${d.hermitian ? "Hermitian" : "non-Hermitian"}`);
+    setStatus($("matinfo"), "");
+  } catch (e) {
+    uploaded = null;
+    setStatus($("fileinfo"), e.message, true);
+  }
+});
+
+/* The textarea is the source of truth when it holds something; `uploaded`
+   covers the case where the matrix was too large to display. Reading it back
+   from the box would silently solve an empty matrix. */
+function matrixText() {
+  const typed = $("matrix").value.trim();
+  if (typed) return typed;
+  if (uploaded) return uploaded;
+  return "";
+}
+
 // ---- samples ---------------------------------------------------------------
 $("load-sample").addEventListener("click", async () => {
   const name = $("sample").value;
@@ -113,6 +179,9 @@ $("load-sample").addEventListener("click", async () => {
   setStatus($("matinfo"), "loading sample…");
   try {
     const d = await (await fetch(`/api/samples/${name}`)).json();
+    uploaded = null;
+    $("matfile").value = "";
+    setStatus($("fileinfo"), "");
     $("matrix").value = d.text;
     $("bmatrix").value = d.b_text || "";
     if (d.b_text) $("bwrap").open = true;

@@ -509,6 +509,18 @@ CALCULATOR = """
     </details>
 
     <div class="row">
+      <label for="matfile">Or load a file</label>
+      <input id="matfile" type="file" accept=".mtx,.gz,.csv,.txt,.dat,.csr,.npy,.npz,.coo">
+      <span id="fileinfo" class="status"></span>
+    </div>
+    <p class="hint">Read on the server with the same reader the desktop app
+       uses, so anything it opens works here: Matrix Market, bare coordinate,
+       CSR arrays (<code>sa</code>, <code>ja</code>, <code>ia</code>), dense
+       text or CSV, NumPy <code>.npy</code>/<code>.npz</code>, and gzip. Large
+       matrices are better loaded than pasted &mdash; the box above is for
+       small ones you want to edit by hand.</p>
+
+    <div class="row">
       <button id="inspect" type="button">Inspect matrix</button>
       <span id="matinfo" class="status"></span>
     </div>

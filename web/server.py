@@ -22,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 import scipy.sparse as sp
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -395,6 +395,144 @@ def _region_bounds(A, B, req: SolveRequest):
         return feastpy.spectral_bounds(A, B)
     except Exception:
         return None
+
+
+def _canonical_text(M) -> str:
+    """Re-emit a parsed matrix as text the other endpoints already accept.
+
+    Uploading has to work for formats that are not text at all -- .npy, .npz,
+    .mtx.gz -- so the file is parsed here and handed back in a form the
+    existing JSON endpoints understand. That keeps one solve path instead of a
+    second one reachable only by upload, which is how the two would drift.
+
+    float() before formatting, always: NumPy 2 renders repr(np.float64(4.0)) as
+    "np.float64(4.0)", which no reader accepts. It cost two CI rounds to learn
+    that on fixtures, and this is the same hazard on the serving path.
+    """
+    if sp.issparse(M):
+        C = sp.coo_matrix(M)
+        rows = [f"{C.shape[0]} {C.shape[1]} {C.nnz}"]
+        if np.iscomplexobj(C.data):
+            rows += [f"{int(i)+1} {int(j)+1} {float(v.real)!r} {float(v.imag)!r}"
+                     for i, j, v in zip(C.row, C.col, C.data)]
+        else:
+            rows += [f"{int(i)+1} {int(j)+1} {float(v)!r}"
+                     for i, j, v in zip(C.row, C.col, C.data)]
+        return "\n".join(rows)
+
+    A = np.asarray(M)
+    if np.iscomplexobj(A):
+        # Dense complex has no bare-coordinate spelling, so emit it as
+        # coordinate too rather than inventing a layout the reader would have
+        # to guess at.
+        return _canonical_text(sp.coo_matrix(A))
+
+    # Matrix Market array, banner and all -- not bare rows of numbers. The
+    # solve endpoints write this text to a file named upload.mtx, so whatever
+    # comes back here is read by the Matrix Market path; bare rows reach it as
+    # "invalid literal for int(): '2.0'" and the upload appears to have worked
+    # right up until the solve. The banner makes the format explicit instead of
+    # depending on the temp file's name.
+    rows = ["%%MatrixMarket matrix array real general",
+            f"{A.shape[0]} {A.shape[1]}"]
+    rows += [repr(float(A[i, j]))                 # column-major, as MM requires
+             for j in range(A.shape[1]) for i in range(A.shape[0])]
+    return "\n".join(rows)
+
+
+@app.post("/api/upload")
+async def api_upload(request: Request, file: UploadFile = File(...)):
+    """Read a matrix from an uploaded file rather than a paste.
+
+    Pasting stops being usable somewhere in the low thousands of nonzeros, and
+    the matrices people actually want to solve start above that. The parsing
+    happens here, with the same reader the desktop app uses, so every format it
+    supports works: Matrix Market, bare coordinate, CSR arrays, dense text,
+    CSV, NumPy .npy/.npz, and gzip.
+
+    Returns the matrix as text for the existing endpoints to consume, plus what
+    the page needs to set up a sensible search region.
+    """
+    rate_limit(request)
+
+    # Read one byte past the limit so an oversized file is detected rather
+    # than silently truncated into a different matrix.
+    raw = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, f"That file is larger than the "
+                                 f"{MAX_UPLOAD_BYTES // (1024*1024)} MB free-tier "
+                                 "limit. The desktop app has no size limit.")
+    if not raw:
+        raise HTTPException(400, "That file is empty.")
+
+    # Keep the original suffix: the reader dispatches on it for .npy, .npz and
+    # .gz, which cannot be sniffed from a text prefix.
+    name = Path(file.filename or "upload").name
+    suffix = "".join(Path(name).suffixes)[:32] or ".mtx"
+    tmpdir = Path(tempfile.mkdtemp(prefix="feast-upload-"))
+    try:
+        target = tmpdir / ("upload" + suffix)
+        target.write_bytes(raw)
+        try:
+            M = matrixio.load_matrix(target)
+        except matrixio.MatrixLoadError as exc:
+            # A CSR triple is a plausible thing to upload and is not something
+            # load_matrix recognises, so try it before giving up.
+            try:
+                M = matrixio.read_csr_arrays(target)
+            except Exception:
+                raise HTTPException(400, f"Could not read {name}: {exc}")
+        except Exception as exc:
+            raise HTTPException(400, f"Could not read {name}: {exc}")
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    if M.shape[0] != M.shape[1]:
+        raise HTTPException(400, f"{name} is {M.shape[0]}x{M.shape[1]}; "
+                                 "the matrix must be square.")
+    n = int(M.shape[0])
+    if sp.issparse(M):
+        if n > MAX_SPARSE_N:
+            raise HTTPException(413, f"{name} is {n}x{n}; the free calculator "
+                                     f"handles sparse matrices up to {MAX_SPARSE_N}.")
+        if M.nnz > MAX_NNZ:
+            raise HTTPException(413, f"{name} has {M.nnz:,} nonzeros; the free "
+                                     f"limit is {MAX_NNZ:,}.")
+    elif n > MAX_DENSE_N:
+        raise HTTPException(413, f"{name} is {n}x{n}; the free calculator handles "
+                                 f"dense matrices up to {MAX_DENSE_N}x{MAX_DENSE_N}. "
+                                 "The desktop app has no such limit.")
+
+    text = _canonical_text(M)
+    if len(text.encode("utf-8", "ignore")) > MAX_UPLOAD_BYTES:
+        # The file fit but its text form does not; say which, rather than
+        # letting the next request fail with a limit the user already met.
+        raise HTTPException(413,
+                            f"{name} parses to more text than the "
+                            f"{MAX_UPLOAD_BYTES // (1024*1024)} MB request limit. "
+                            "The desktop app has no size limit.")
+
+    hermitian = _is_hermitian(M)
+    out = {"name": name, "text": text, "n": n,
+           "sparse": bool(sp.issparse(M)),
+           "nnz": int(M.nnz) if sp.issparse(M) else int(M.size),
+           "hermitian": hermitian,
+           "complex": bool(np.iscomplexobj(M.data if sp.issparse(M) else M)),
+           "describe": matrixio.describe(M)}
+    try:
+        centre, radius = feastpy.spectral_disc(M)
+        out["center_re"], out["center_im"] = centre.real, centre.imag
+        out["radius"] = radius
+        out["disc_is_bound"] = True
+    except Exception:
+        pass
+    if hermitian:
+        try:
+            lo, hi = feastpy.spectral_bounds(M)
+            out["emin"], out["emax"] = lo, hi
+        except Exception:
+            pass
+    return out
 
 
 @app.get("/api/limits")

@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import scipy.sparse as sp
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "python"))
@@ -253,6 +254,86 @@ r = client.post("/api/solve", json={"matrix": s["text"],
                                     "contour_points": 16}).json()
 check("the sample solves as shipped", r.get("info") == 0 and r.get("n_found") == 120,
       f"info={r.get('info')} n={r.get('n_found')}")
+
+print("\nuploading a file works for every format the reader supports:")
+import gzip as _gzip
+import io as _io
+
+_n = 40
+_L = (np.diag([2.0] * _n) + np.diag([-1.0] * (_n - 1), 1)
+      + np.diag([-1.0] * (_n - 1), -1))
+_S = sp.csr_matrix(_L)
+_C = _S.tocoo()
+
+
+def _num2(v):
+    """float() first -- see _num in the binding tests; same NumPy 2 hazard."""
+    return repr(float(v))
+
+
+_body = f"{_n} {_n} {_C.nnz}\n" + "\n".join(
+    f"{int(i)+1} {int(j)+1} {_num2(v)}"
+    for i, j, v in zip(_C.row, _C.col, _C.data))
+
+_buf = _io.BytesIO()
+np.save(_buf, _L)
+_npy = _buf.getvalue()
+_buf = _io.BytesIO()
+sp.save_npz(_buf, _S)
+_npz = _buf.getvalue()
+_gz = _gzip.compress(_body.encode())
+
+_uploads = {
+    "dense.txt": "\n".join(" ".join(_num2(v) for v in r) for r in _L).encode(),
+    "dense.csv": "\n".join(",".join(_num2(v) for v in r) for r in _L).encode(),
+    "coord.mtx": _body.encode(),
+    # the same content under a name the reader must not dispatch on
+    "coord.dat": _body.encode(),
+    "csr.csr": (" ".join(_num2(v) for v in _S.data) + "\n"
+                + " ".join(str(int(x) + 1) for x in _S.indices) + "\n"
+                + " ".join(str(int(x) + 1) for x in _S.indptr)).encode(),
+    "m.npy": _npy,
+    "m.npz": _npz,
+    "bare.mtx.gz": _gz,
+}
+
+_exact = sorted(2 - 2 * np.cos(k * np.pi / (_n + 1)) for k in range(1, _n + 1))
+_want = [v for v in _exact if 0.0 <= v <= 0.5]
+
+for _name, _blob in sorted(_uploads.items()):
+    _r = client.post("/api/upload", files={"file": (_name, _blob)})
+    if _r.status_code != 200:
+        check(f"upload {_name}", False, f"{_r.status_code} {str(_r.json())[:60]}")
+        continue
+    _u = _r.json()
+    # The upload is only useful if the text it returns actually solves, so the
+    # round trip is the test -- not the status code.
+    _s = client.post("/api/solve", json={"matrix": _u["text"], "emin": 0.0,
+                                         "emax": 0.5, "m0": 20}).json()
+    _ok = _s.get("info") == 0 and _s.get("n_found") == len(_want)
+    _err = (max(abs(a - b) for a, b in zip(sorted(_s["eigenvalues"]), _want))
+            if _ok else float("inf"))
+    check(f"upload {_name} then solve", _ok and _err < 1e-10,
+          f"found {_s.get('n_found')}/{len(_want)} err {_err:.1e}")
+
+check("an uploaded Hermitian matrix comes back with an interval",
+      "emin" in client.post("/api/upload",
+                            files={"file": ("d.txt", _uploads["dense.txt"])}).json())
+
+print("\nbad uploads are refused, not half-read:")
+for _name, _blob, _why in (
+        ("empty.mtx", b"", "an empty file"),
+        ("junk.mtx", b"not a matrix at all", "a file that is not a matrix"),
+        ("oblong.txt", b"1.0 2.0 3.0\n4.0 5.0 6.0\n", "a non-square matrix")):
+    _r = client.post("/api/upload", files={"file": (_name, _blob)})
+    check(f"upload refuses {_why}", _r.status_code == 400,
+          f"status {_r.status_code}")
+
+_huge = ("%%MatrixMarket matrix array real general\n600 600\n"
+         + "\n".join(["1.0"] * (600 * 600))).encode()
+_r = client.post("/api/upload", files={"file": ("huge.mtx", _huge)})
+check("upload refuses a matrix past the dense size cap",
+      _r.status_code == 413, f"status {_r.status_code}")
 
 print(f"\n{passed}/{passed + failed} passed")
 sys.exit(1 if failed else 0)

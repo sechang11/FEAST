@@ -219,7 +219,7 @@ jobs:
           # fastapi for the web backend; httpx is what TestClient drives it
           # through, and its absence fails as a bare ImportError rather than
           # as "install httpx", so it is named explicitly.
-          python -m pip install fastapi httpx
+          python -m pip install fastapi httpx python-multipart
           # cryptography belongs to the licensing layer, which is inert until a
           # signing key is configured, and the package already runs without it.
           # It has no wheel for every platform/Python pair -- macOS-Intel with
