@@ -498,8 +498,22 @@ import tempfile as _tf
 
 _d = _tf.mkdtemp()
 _A = np.array([[4., 1., 0.], [1., 3., 1.], [0., 1., 2.]])
+
+
+def _num(v) -> str:
+    """A number as a data file must contain it.
+
+    NumPy 2 changed scalar repr: repr(np.float64(4.0)) is "np.float64(4.0)",
+    so writing fixtures with {value!r} straight off an array emits text no
+    matrix reader will accept. It passes on NumPy 1 and fails everywhere the
+    CI runs, which makes it look like the loader broke rather than the
+    fixture. float() first, always.
+    """
+    return repr(float(v))
+
+
 _coord = "3 3 7\n" + "\n".join(
-    f"{i+1} {j+1} {_A[i, j]!r}"
+    f"{i+1} {j+1} {_num(_A[i, j])}"
     for i in range(3) for j in range(3) if _A[i, j] != 0)
 
 
@@ -533,8 +547,8 @@ results.append(check(
 # must not be reinterpreted as coordinate. The third case has a header that
 # looks like one but whose nnz disagrees with the number of data lines.
 for _name, _text, _shape in (
-        ("dense.txt", "\n".join(" ".join(repr(v) for v in r) for r in _A), (3, 3)),
-        ("dense.csv", "\n".join(",".join(repr(v) for v in r) for r in _A), (3, 3)),
+        ("dense.txt", "\n".join(" ".join(_num(v) for v in r) for r in _A), (3, 3)),
+        ("dense.csv", "\n".join(",".join(_num(v) for v in r) for r in _A), (3, 3)),
         ("table.txt", "3 3 7\n1 1 4\n1 2 1\n2 1 1", (4, 3))):
     _M = matrixio.load_matrix(_w(_name, _text))
     _dn = _dense_of(_M)
@@ -552,7 +566,7 @@ _S = sp.csr_matrix(_Acsr)
 
 
 def _csr_text(base, sep="\n"):
-    return sep.join([" ".join(repr(v) for v in _S.data),
+    return sep.join([" ".join(_num(v) for v in _S.data),
                      " ".join(str(x + base) for x in _S.indices),
                      " ".join(str(x + base) for x in _S.indptr)]) + "\n"
 
@@ -571,7 +585,7 @@ for _base, _tag in ((1, "1-based (Fortran/FEAST)"), (0, "0-based (SciPy)")):
                          np.allclose(_M.toarray(), _Acsr)))
 
     _M = matrixio.read_csr_arrays(
-        _w(f"sa_{_base}.txt", " ".join(repr(v) for v in _S.data)),
+        _w(f"sa_{_base}.txt", " ".join(_num(v) for v in _S.data)),
         _w(f"ja_{_base}.txt", " ".join(str(x + _base) for x in _S.indices)),
         _w(f"ia_{_base}.txt", " ".join(str(x + _base) for x in _S.indptr)))
     results.append(check(f"CSR arrays as three files, {_tag}",
@@ -582,7 +596,7 @@ for _base, _tag in ((1, "1-based (Fortran/FEAST)"), (0, "0-based (SciPy)")):
 _B = sp.random(200, 200, density=0.02, random_state=0, format="csr")
 _B = (_B + _B.T).tocsr() + sp.eye(200, format="csr") * 5
 _M = matrixio.read_csr_arrays(_w("big.csr",
-    " ".join(repr(v) for v in _B.data) + "\n"
+    " ".join(_num(v) for v in _B.data) + "\n"
     + " ".join(str(x + 1) for x in _B.indices) + "\n"
     + " ".join(str(x + 1) for x in _B.indptr) + "\n"))
 results.append(check("CSR round-trip on a 200x200 is exact",
@@ -601,6 +615,35 @@ for _name, _text in (
         results.append(check(f"CSR refuses {_name}", False, "it loaded"))
     except matrixio.MatrixLoadError:
         results.append(check(f"CSR refuses {_name}", True))
+
+# --- fixtures must contain numbers, not NumPy reprs -------------------------
+# This bug has shipped to CI twice: fixtures written with {value!r} off a NumPy
+# array emit "np.float64(4.0)" on NumPy 2 and "4.0" on NumPy 1, so a machine
+# with the older NumPy cannot reproduce it and the failure looks like the
+# loader breaking. Assert the property directly, which fails on either version.
+# Checking _num(np.float64(4.0)) == "4.0" would pass on NumPy 1 whether or not
+# float() is applied, so it proves nothing on the machine most likely to be
+# writing the fixture. Hand it a scalar whose repr is deliberately wrong
+# instead: only an implementation that converts first can strip it. This fails
+# on every NumPy version if the conversion is ever dropped.
+class _AwkwardScalar(float):
+    def __repr__(self):
+        return f"np.float64({float(self)})"
+
+
+results.append(check("_num converts before formatting, on any NumPy",
+                     _num(_AwkwardScalar(4.0)) == "4.0",
+                     _num(_AwkwardScalar(4.0))))
+_fixtures = {
+    "coordinate": _coord,
+    "CSR 1-based": _csr_text(1),
+    "CSR 0-based": _csr_text(0),
+    "dense rows": " ".join(_num(v) for v in _Acsr[0]),
+}
+for _fname, _ftext in _fixtures.items():
+    results.append(check(f"the {_fname} fixture holds no NumPy reprs",
+                         "np." not in _ftext,
+                         next((t for t in _ftext.split() if "np." in t), "")))
 
 print(f"\n{sum(results)}/{len(results)} passed")
 raise SystemExit(0 if all(results) else 1)
