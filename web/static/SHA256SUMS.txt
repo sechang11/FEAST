@@ -2,10 +2,10 @@
 
 ## Applications (unzip and run)
 
-a905ccdef12eaea10a84a118c5377fb17a26e6f572de0d7b25d921cddbeb3dc1  FEAST-linux-x64.tar.gz  (170 MB)
-a2e1037ceabd815f2bb31252c0d1ae8d8b38de96e20afd3e16db99fadf603df1  FEAST-macos-arm64.tar.gz  (97 MB)
-602671722e646cf9a7c66c9bb7cad324fce5736d1834cd6d9438a1bd5aa13d42  FEAST-macos-x64.tar.gz  (109 MB)
-ee6831a6f0d0c34e6ced30cc22687137188b474b750517413ba69e75a42d595e  FEAST-windows-x64.zip  (143 MB)
+b37311c9ff741100093084c805854dcec12af9b4e601175a5764df6919bddc23  FEAST-linux-x64.tar.gz  (170 MB)
+c67da244d819253047fe3718ae9c2fc4472802da0145f03bf8346d6f367353a1  FEAST-macos-arm64.tar.gz  (97 MB)
+cea5e6cef9491bf1b1022014f326787648d56713fe87bd8a13422a362d3b2f51  FEAST-macos-x64.tar.gz  (109 MB)
+7177c52bf17a958aab11b6d91e7ccf6879a312611bce189e6504771d51bd5fd1  FEAST-windows-x64.zip  (143 MB)
 
 ## Developer Kits (libraries, headers, all 80 upstream examples)
 
